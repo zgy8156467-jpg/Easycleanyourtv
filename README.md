@@ -273,6 +273,25 @@ cd launcher
 > **踩坑提示**：如果 `$HOME/.android` 目录不可写（常见于曾用 root 跑过 Android 工具的机器），
 > debug 签名会失败。解决：生成一个 keystore，并在 `keystore.properties` 里指向它。
 
+## 自己发布 / 二次分发
+
+**APK 的更新不走 GitHub**，走应用内写死的服务器（[`Remote.java`](launcher/app/src/main/java/com/gathin/tvhome/Remote.java) 第 48 行）：
+
+- 检查更新：`GET http://114.55.39.150/update.json`（老设备版 `/update-legacy.json`）
+- 下载：优先用 JSON 里的 `url`；没有则回退到 `<BASE>/apk/modern-<versionCode>.apk` 或 `legacy-<versionCode>.apk`
+
+由此：
+
+1. **只编译、不改代码**：你发出去的包仍然检查作者的服务器，更新控制权在作者手里，用户的反馈和崩溃也进作者的通道。
+2. **要自己发**：把 `BASE` 改成你的服务器，返回的 JSON 至少包含
+   ```json
+   {"versionCode": 44, "versionName": "2.0.5", "url": "http://你的服务器/app.apk", "md5": "..."}
+   ```
+   `url` 留空则按上面的 `/apk/<channel>-<versionCode>.apk` 回退。`md5` 用来校验下载。
+3. **签名**：在 `keystore.properties` 填你自己的 keystore。不同签名**不能覆盖**作者的包，会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`；用户的电视要先卸载（桌面设置会清掉）才能装你的。
+4. **想和作者的包共存**：在 `launcher/app/build.gradle` 的 `defaultConfig` 里加 `applicationIdSuffix ".yourname"`，包名变成 `com.gathin.tvhome.yourname`，两个桌面可以同时装。
+5. **反馈/崩溃上报**也打到 `BASE`。`keystore.properties` 的 `feedbackToken` 留空时请求不带 token，服务器会拒绝，等于不上报。
+
 ## 已知问题
 
 - 部分电视 ROM 在应用启动瞬间会残留一个透明的「启动中」占位窗（`APPLICATION_ATTACHED_DIALOG`），

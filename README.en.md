@@ -291,6 +291,26 @@ existing build.
 > as root), debug signing fails. Fix: generate a keystore and point `keystore.properties` at it
 > in `app/build.gradle`.
 
+## Publishing your own build
+
+**Updates do not come from GitHub.** They come from a server URL compiled into the app
+([`Remote.java`](launcher/app/src/main/java/com/gathin/tvhome/Remote.java), line 48):
+
+- Update check: `GET http://114.55.39.150/update.json` (`/update-legacy.json` for the legacy flavour)
+- Download: the `url` field if present, otherwise `<BASE>/apk/modern-<versionCode>.apk` or `legacy-<versionCode>.apk`
+
+So:
+
+1. **Build without changing code**: your APK still checks the author's server. The author controls updates, and users' feedback and crash reports go to the author.
+2. **To publish your own**: point `BASE` at your server. The JSON needs at least
+   ```json
+   {"versionCode": 44, "versionName": "2.0.5", "url": "http://your-server/app.apk", "md5": "..."}
+   ```
+   Leave `url` empty to use the `/apk/<channel>-<versionCode>.apk` fallback. `md5` is verified after download.
+3. **Signing**: put your own keystore in `keystore.properties`. A different signature **cannot** overwrite the author's build — installation fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Users must uninstall first (desktop settings are lost).
+4. **Coexist with the author's build**: add `applicationIdSuffix ".yourname"` to `defaultConfig` in `launcher/app/build.gradle`. The package becomes `com.gathin.tvhome.yourname` and both launchers can be installed side by side.
+5. **Feedback and crash reports** also go to `BASE`. With an empty `feedbackToken` in `keystore.properties` the requests carry no token and the server rejects them, i.e. no reporting.
+
 ## Known issues
 
 - On some TV ROMs a transparent "starting" placeholder window (`APPLICATION_ATTACHED_DIALOG`) is left

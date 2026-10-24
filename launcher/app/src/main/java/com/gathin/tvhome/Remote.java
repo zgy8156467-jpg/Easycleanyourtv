@@ -7,6 +7,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -271,9 +272,29 @@ final class Remote {
      * console shows which shape the TV refused.
      */
     static boolean install(Context context, File apk) {
-        // PackageInstaller session first. It needs no installer activity with an intent filter, and
-        // that is exactly what some TV ROMs lack: on MIUI TV 6 (MiTV4) every VIEW / INSTALL_PACKAGE
-        // intent dies with ActivityNotFoundException, so the old paths could never work there.
+        // Android 4.x-6.x installers take a file:// URI directly, and this is the same path a file
+        // manager takes. Prefer it there: MIUI TV 6 (Android 6) shows its confirmation UI for a
+        // PackageInstaller session but then fails the session with INSTALL_FAILED_USER_RESTRICTED,
+        // while the plain VIEW below installs the identical APK.
+        if (Build.VERSION.SDK_INT < 24) {
+            File shared = copyToExternal(context, apk);
+            if (shared != null) {
+                try {
+                    context.startActivity(new Intent(Intent.ACTION_VIEW)
+                            .setDataAndType(Uri.fromFile(shared), APK_MIME)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    return true;
+                } catch (Exception e) {
+                    Log.w(TAG, "install file:// failed", e);
+                    Errors.record("update", "install file: "
+                            + e.getClass().getSimpleName() + " " + e.getMessage());
+                }
+            }
+        }
+        // PackageInstaller session next. It needs no installer activity with an intent filter, and
+        // that is exactly what some TV ROMs lack: on some MIUI TV 6 builds every VIEW /
+        // INSTALL_PACKAGE intent dies with ActivityNotFoundException. The file:// attempt above
+        // covers those, so the session is the fallback when it fails.
         if (Build.VERSION.SDK_INT >= 21 && installWithSession(context, apk)) return true;
         Uri uri = null;
         try {
@@ -300,21 +321,6 @@ final class Remote {
                 } catch (Exception e) {
                     Log.w(TAG, "install " + action + " failed", e);
                     Errors.record("update", "install " + action + ": "
-                            + e.getClass().getSimpleName() + " " + e.getMessage());
-                }
-            }
-        }
-        if (Build.VERSION.SDK_INT < 24) {
-            File shared = copyToExternal(context, apk);
-            if (shared != null) {
-                try {
-                    context.startActivity(new Intent(Intent.ACTION_VIEW)
-                            .setDataAndType(Uri.fromFile(shared), APK_MIME)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                    return true;
-                } catch (Exception e) {
-                    Log.w(TAG, "install file:// failed", e);
-                    Errors.record("update", "install file: "
                             + e.getClass().getSimpleName() + " " + e.getMessage());
                 }
             }
@@ -355,21 +361,38 @@ final class Remote {
 
     /** A copy of the update outside the private cache, so a file://-only installer can read it. */
     private static File copyToExternal(Context context, File apk) {
-        try {
-            File dir = context.getExternalFilesDir("update");
-            if (dir == null) return null;
+        // App-specific external storage first; the public Downloads folder second. MIUI TV 6
+        // refuses the first with EACCES unless the app holds the storage permission, which the
+        // update panel asks for before calling us. Either location is readable by the installer.
+        File dir = context.getExternalFilesDir("update");
+        if (dir != null) {
             File out = new File(dir, "tvhome.apk");
-            try (InputStream in = new java.io.FileInputStream(apk);
-                 OutputStream os = new FileOutputStream(out)) {
+            if (copy(apk, out)) return out;
+        }
+        File downloads = Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOWNLOADS);
+        File out = new File(downloads, "tvhome-update.apk");
+        return copy(apk, out) ? out : null;
+    }
+
+    private static boolean copy(File from, File to) {
+        try {
+            File parent = to.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                throw new IOException("mkdirs " + parent);
+            }
+            try (InputStream in = new FileInputStream(from);
+                 OutputStream os = new FileOutputStream(to)) {
                 byte[] buf = new byte[65536];
                 int n;
                 while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
             }
-            return out;
+            return true;
         } catch (Exception e) {
-            Log.w(TAG, "copy to external failed", e);
-            Errors.record("update", "copy: " + e.getClass().getSimpleName() + " " + e.getMessage());
-            return null;
+            Log.w(TAG, "copy to " + to + " failed", e);
+            Errors.record("update", "copy " + to.getName() + ": "
+                    + e.getClass().getSimpleName() + " " + e.getMessage());
+            return false;
         }
     }
 

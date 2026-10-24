@@ -21,6 +21,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- The update APK is handed to the system installer; Android 8+ asks the user to allow it. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 6 MIUI refuses writes to external storage without it, and the update APK has to
+         land somewhere the system installer can read. Not needed with scoped storage. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Foreground-app lookup for the Home key takeover; the user grants it through the app-ops
          setting (adb shell appops set com.gathin.tvhome GET_USAGE_STATS allow). -->

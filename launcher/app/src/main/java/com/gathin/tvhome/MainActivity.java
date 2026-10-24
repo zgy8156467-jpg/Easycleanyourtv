@@ -89,6 +89,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private DockDecoration dockDecoration;
     private static final int REQ_PICK_WALLPAPER = 41;
     private static final int REQ_UNINSTALL = 42;
+    private static final int REQ_INSTALL_STORAGE = 43;
+    /** APK waiting for the storage permission Android 6 needs before the installer can read it. */
+    private java.io.File pendingInstall;
     /** Weak boxes cannot keep up with the tweens; this turns the desk's motion down to a minimum. */
     private boolean reducedMotion;
     /** User's icon-per-row choice; 0 means "whatever this screen is happy with". */
@@ -1335,6 +1338,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         } else {
             toast(getString(R.string.wallpaper_bad));
         }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_INSTALL_STORAGE) return;
+        final java.io.File apk = pendingInstall;
+        pendingInstall = null;
+        if (apk == null) return;
+        if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+            toast(getString(R.string.not_available));
+            return;
+        }
+        if (!Remote.install(this, apk)) toast(getString(R.string.not_available));
     }
 
     /**
@@ -2793,7 +2811,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                             return;
                         }
                         popup.dismiss();
-                        if (!Remote.install(MainActivity.this, new java.io.File(path))) {
+                        final java.io.File apk = new java.io.File(path);
+                        // Android 6 MIUI denies external-storage writes until this is granted, and
+                        // the file:// install path needs somewhere the installer can read.
+                        if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT < 24
+                                && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                != PackageManager.PERMISSION_GRANTED) {
+                            pendingInstall = apk;
+                            requestPermissions(new String[]{
+                                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                                    REQ_INSTALL_STORAGE);
+                            return;
+                        }
+                        if (!Remote.install(MainActivity.this, apk)) {
                             toast(getString(R.string.not_available));
                         } else if (switching) {
                             toast(getString(R.string.stable_started));

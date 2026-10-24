@@ -255,8 +255,40 @@
                 android:orientation="horizontal"
                 android:padding="3dp">
 
+                <!-- Wi-Fi keeps its own pill to the left: the sheet behind it lists the networks
+                     around, which is a different job from the control panel. -->
+                <FrameLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content">
+
+                    <View
+                        android:id="@+id/wifiGlass"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_gravity="center"
+                        android:background="@drawable/control_button_glass"
+                        android:alpha="0" />
+
+                    <ImageView
+                        android:id="@+id/btnWifi"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_gravity="center"
+                        android:background="@null"
+                        android:padding="11dp"
+                        android:src="@drawable/ic_wifi"
+                        android:scaleType="fitCenter"
+                        android:focusable="true"
+                        android:clickable="true"
+                        android:contentDescription="@string/network"
+                        android:nextFocusLeft="@id/btnWifi"
+                        android:nextFocusRight="@id/btnControl"
+                        android:nextFocusUp="@id/btnWifi"
+                        android:nextFocusDown="@+id/grid" />
+                </FrameLayout>
+
                 <!-- One glass entry, like the tvOS control pill: everything (wallpaper, dock,
-                     sources, network, brightness) lives in the panel it opens. -->
+                     sources) lives in the panel it opens. -->
                 <FrameLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content">
@@ -285,6 +317,9 @@
                         android:focusable="true"
                         android:clickable="true"
                         android:contentDescription="@string/control_center"
+                        android:nextFocusLeft="@id/btnWifi"
+                        android:nextFocusRight="@id/btnControl"
+                        android:nextFocusUp="@id/btnControl"
                         android:nextFocusDown="@+id/grid" />
 
                     <!-- Unread update badge. A dot, not a number: there is only ever one update. -->

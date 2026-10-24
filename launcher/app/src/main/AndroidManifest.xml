@@ -7,14 +7,10 @@
 
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <!-- Control Centre toggles. All are normal permissions on Android 6; brightness additionally
-         needs the WRITE_SETTINGS app-op (granted over adb or from the panel). -->
+    <!-- Control Centre toggles. All are normal permissions. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-    <uses-permission
-        android:name="android.permission.WRITE_SETTINGS"
-        tools:ignore="ProtectedPermissions" />
     <!-- Needed on Android 10 to read the Wi-Fi network name; granted over adb at install time. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- Bing wallpaper, the update check and crash uploads all go through this. -->
@@ -33,6 +29,11 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- A launcher is the app list: without this Android 11+ only shows us packages we happen to
+         name, and vendor file managers and app stores would disappear from the grid. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
     <!-- Android 11+ hides other packages from us unless we name them; the Settings/Wi-Fi fallback
          in MainActivity needs to see Xiaomi's own settings app. -->
     <queries>

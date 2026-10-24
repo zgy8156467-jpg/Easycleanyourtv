@@ -74,11 +74,9 @@
     <string name="control_center">控制中心</string>
     <string name="network">网络</string>
     <string name="bluetooth">蓝牙</string>
-    <string name="brightness">亮度</string>
     <string name="volume">音量</string>
     <string name="on">已开</string>
     <string name="off">已关</string>
-    <string name="brightness_permission">允许调节亮度</string>
     <string name="crash_title">桌面启动出错了</string>
     <string name="crash_hint">拍下这个画面发到群里，然后按确定再进桌面。</string>
     <string name="crash_continue">重新进入桌面</string>
@@ -115,6 +113,9 @@
     <string name="a11y_lost_go">去开启</string>
     <string name="a11y_first_title">让 Home 键回到这个桌面</string>
     <string name="a11y_first_notes">到「设置 → 无障碍 → Home 键回顶」打开，再在「使用情况访问」里允许「电视桌面」。不开也能用，但按 Home 会回原厂桌面。</string>
+    <string name="a11y_guide_title">这台电视要用 ADB 打开 Home 键接管</string>
+    <string name="a11y_guide_notes">创维/酷开系统没有无障碍设置页，只能从电脑用 ADB 开一次。\n拍照保存并按指示操作。\n\n1. 电视上进工厂菜单：设置 → 通用 → 关于本机 → 本机信息 → 更多信息，停在这个页面按 上上下下左右左右，进「通用设置」把「ADB开关」打开，再重启电视。\n2. 电脑连同一个 Wi-Fi，执行：\nadb connect 【你的电视IP地址】:5555\nadb shell settings put secure enabled_accessibility_services com.gathin.tvhome/.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set com.gathin.tvhome GET_USAGE_STATS allow\n\n桌面每次升级系统都会关掉它，升级后重跑中间两条 settings 命令。</string>
+    <string name="a11y_guide_ok">知道了</string>
     <string name="update_no_notes">这个版本没有写更新说明。</string>
     <string name="no_apps">没有找到可显示的应用</string>
     <string name="weather_clear">晴</string>
@@ -134,7 +135,7 @@
     <string name="weather_city_manual">手动设置 · %1$s</string>
     <string name="weather_city_title">选择城市</string>
     <string name="weather_city_auto_row">自动定位（按 IP）</string>
-    <string name="weather_city_back">‹ 返回省份</string>
+    <string name="weather_city_back">‹ 返回</string>
     <string name="weather_city_set">天气城市已设为 %1$s</string>
     <string name="forecast_days">预报天数</string>
     <string name="forecast_1">当天</string>
@@ -162,5 +163,16 @@
     <string name="no_paired_devices">还没有配对设备</string>
     <string name="devices_connected">已连接 %1$d 台设备</string>
     <string name="network_off">未连接</string>
+    <string name="wifi_hotspots">个人热点</string>
+    <string name="wifi_known">已知网络</string>
+    <string name="wifi_other">其他网络</string>
+    <string name="wifi_saved">已保存</string>
+    <string name="wifi_connecting">正在连接 %1$s</string>
+    <string name="wifi_scan">搜索附近网络</string>
+    <string name="wifi_scanning">正在搜索…</string>
+    <string name="wifi_no_new">没有发现新的网络</string>
+    <string name="wifi_settings">Wi-Fi 设置…</string>
+    <string name="wifi_off">Wi-Fi 已关闭</string>
+    <string name="wifi_no_networks">没有找到网络</string>
     <string name="mi_home">米家</string>
 </resources>

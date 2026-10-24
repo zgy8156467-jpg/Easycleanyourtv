@@ -125,6 +125,7 @@ final class Weather {
                     city = place;
                     lat = p.getFloat(KEY_LAT, 0f);
                     lon = p.getFloat(KEY_LON, 0f);
+                    if (lat == 0 && lon == 0) throw new Exception("no coordinates for " + place);
                 } else {
                     JSONObject ip = new JSONObject(read(
                             "http://ip-api.com/json/?fields=status,city,lat,lon&lang=zh-CN"));

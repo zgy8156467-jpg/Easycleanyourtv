@@ -15,8 +15,15 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.LinearGradient;
+import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
+import android.graphics.Shader;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -26,6 +33,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
 import android.media.tv.TvInputManager;
 import android.net.Uri;
+import android.net.wifi.ScanResult;
+import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -33,6 +42,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -67,7 +77,9 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -90,8 +102,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private static final int REQ_PICK_WALLPAPER = 41;
     private static final int REQ_UNINSTALL = 42;
     private static final int REQ_INSTALL_STORAGE = 43;
+    private static final int REQ_WIFI_SCAN = 44;
     /** APK waiting for the storage permission Android 6 needs before the installer can read it. */
     private java.io.File pendingInstall;
+    /** The Wi-Fi sheet is waiting for the location grant scanning needs. */
+    private boolean wifiPanelAfterGrant;
     /** Weak boxes cannot keep up with the tweens; this turns the desk's motion down to a minimum. */
     private boolean reducedMotion;
     /** User's icon-per-row choice; 0 means "whatever this screen is happy with". */
@@ -378,6 +393,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             stopDockEdit();
             showControlCenter();
         });
+        // Wi-Fi sits beside the control pill rather than inside its sheet: the sheet is the place
+        // for everything else, and switching networks is worth one press less.
+        View btnWifi = findViewById(R.id.btnWifi);
+        if (btnWifi != null) btnWifi.setOnClickListener(v -> {
+            stopDockEdit();
+            showNetworkDetails();
+        });
 
         // Keep focus on the top bar and at the top: Android's focus finder would otherwise jump to a
         // tile far below when there is nothing in that direction.
@@ -389,41 +411,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 focusTile(lastFocused % COLUMNS);
                 return true;
             }
-            // It is the only pill left, so neither side has anywhere else to go.
-            return keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
+            // Left and right walk between the two pills; their next-focus attributes keep the
+            // search inside the top bar when there is no pill that way.
+            return false;
         };
-        if (btnControl != null) btnControl.setOnKeyListener(pillKeys);
-
         // The glyph sits bare on the wallpaper: focus wraps it in an iOS frosted square and
         // brightens it instead of filling it white.
-        final View controlGlass = findViewById(R.id.controlGlass);
-        if (btnControl != null) {
-            final View pill = btnControl;
-            pill.setAlpha(0.8f);
-            pill.setOnFocusChangeListener((v, hasFocus) -> {
-                pill.setAlpha(hasFocus ? 1f : 0.8f);
-                if (controlGlass == null) return;
-                controlGlass.animate().cancel();
-                if (hasFocus) {
-                    controlGlass.setScaleX(0.92f);
-                    controlGlass.setScaleY(0.92f);
-                    if (reducedMotion) {
-                        controlGlass.setAlpha(1f);
-                        controlGlass.setScaleX(1f);
-                        controlGlass.setScaleY(1f);
-                    } else {
-                        controlGlass.animate().alpha(1f).scaleX(1f).scaleY(1f)
-                                .setDuration(200)
-                                .setInterpolator(new OvershootInterpolator(1.4f)).start();
-                    }
-                } else if (reducedMotion) {
-                    controlGlass.setAlpha(0f);
-                } else {
-                    controlGlass.animate().alpha(0f).scaleX(0.92f).scaleY(0.92f)
-                            .setDuration(140).start();
-                }
-            });
-        }
+        stylePill(btnWifi, findViewById(R.id.wifiGlass), pillKeys);
+        stylePill(btnControl, findViewById(R.id.controlGlass), pillKeys);
 
         // An update found in the background leaves a dot instead of taking over the desk. The
         // banner is the one-time announcement; both are only an entry point to the same panel.
@@ -1344,6 +1339,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     public void onRequestPermissionsResult(int requestCode, String[] permissions,
                                            int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_WIFI_SCAN) {
+            if (!wifiPanelAfterGrant) return;
+            wifiPanelAfterGrant = false;
+            WifiManager wm = (WifiManager) getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+            if (wm == null) return;
+            if (grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                showNetworkDetails();
+            } else {
+                // Without the grant there is no list of neighbours, but the saved networks and
+                // the way out to Settings still are.
+                buildWifiPanel(wm);
+            }
+            return;
+        }
         if (requestCode != REQ_INSTALL_STORAGE) return;
         final java.io.File apk = pendingInstall;
         pendingInstall = null;
@@ -1513,7 +1524,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     // ---- weather city picker --------------------------------------------------------------------
 
-    /** Provinces first, then the cities of the chosen province; Back closes the popup. */
+    /** Provinces first, then the cities of the province, then the districts of the city. */
     private void showCityPicker() {
         if (cityData == null) cityData = loadCities();
         if (cityData == null) {
@@ -1540,24 +1551,68 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         final JSONObject province = cityData.optJSONObject(provinceIndex);
         final JSONArray cities = province == null ? null : province.optJSONArray("c");
         if (cities == null) return;
+        // 北京/天津/上海/重庆 hold one city that is the province: its list is the districts.
+        if (cities.length() == 1
+                && province.optString("p").equals(cities.optJSONObject(0).optString("n"))) {
+            showDistricts(provinceIndex, 0, true);
+            return;
+        }
         List<String> rows = new ArrayList<>();
         rows.add(getString(R.string.weather_city_back));
         for (int i = 0; i < cities.length(); i++) {
-            rows.add(cities.optJSONArray(i).optString(0));
+            rows.add(cities.optJSONObject(i).optString("n"));
         }
         showCityList(province.optString("p"), rows, position -> {
             if (position == 0) {
                 showCityPicker();
                 return;
             }
-            JSONArray city = cities.optJSONArray(position - 1);
-            if (city == null) return;
-            String name = city.optString(0);
-            Weather.setPlace(this, name, city.optDouble(1, 0), city.optDouble(2, 0));
-            refreshWeather(true);
-            toast(getString(R.string.weather_city_set, name));
-            if (cityPicker != null) cityPicker.dismiss();
+            showDistricts(provinceIndex, position - 1, false);
         });
+    }
+
+    /**
+     * The third level: the city itself (its centre) and its districts and counties. Cities that
+     * have no districts in the data — the Taiwan entries and the county-level cities provinces run
+     * directly — are set straight from the previous level.
+     */
+    private void showDistricts(final int provinceIndex, final int cityIndex, final boolean fromTop) {
+        final JSONObject province = cityData.optJSONObject(provinceIndex);
+        final JSONArray cities = province == null ? null : province.optJSONArray("c");
+        if (cities == null || cityIndex < 0 || cityIndex >= cities.length()) return;
+        final JSONObject city = cities.optJSONObject(cityIndex);
+        final JSONArray districts = city.optJSONArray("d");
+        if (districts == null || districts.length() == 0) {
+            setWeatherCity(city.optString("n"), city.optDouble("x", 0), city.optDouble("y", 0));
+            return;
+        }
+        final List<String> rows = new ArrayList<>();
+        rows.add(getString(R.string.weather_city_back));
+        rows.add(city.optString("n"));
+        for (int i = 0; i < districts.length(); i++) {
+            rows.add(districts.optJSONArray(i).optString(0));
+        }
+        showCityList(city.optString("n"), rows, position -> {
+            if (position == 0) {
+                if (fromTop) showCityPicker();
+                else showProvince(provinceIndex);
+                return;
+            }
+            if (position == 1) {
+                setWeatherCity(city.optString("n"), city.optDouble("x", 0), city.optDouble("y", 0));
+                return;
+            }
+            JSONArray district = districts.optJSONArray(position - 2);
+            if (district == null) return;
+            setWeatherCity(district.optString(0), district.optDouble(1, 0), district.optDouble(2, 0));
+        });
+    }
+
+    private void setWeatherCity(String name, double lat, double lon) {
+        Weather.setPlace(this, name, lat, lon);
+        refreshWeather(true);
+        toast(getString(R.string.weather_city_set, name));
+        if (cityPicker != null) cityPicker.dismiss();
     }
 
     private void showCityList(CharSequence title, List<String> rows, CityAdapter.OnPick pick) {
@@ -2378,15 +2433,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     }
 
     /**
-     * iOS-style sheet: a full-screen frosted snapshot of the desk with the modules floating on it.
-     * The dark card the panel used to sit in was most of why it read as an Android dialog; control
-     * centre modules float straight over the blur on iOS. Real-time backdrop blur needs API 31 and
-     * headroom a TV GPU does not have, but nothing behind the panel moves while it is open, so a
-     * still blurred before it opens is indistinguishable. One quarter-scale draw and two box passes
-     * over ~60k pixels, done only on open.
+     * Dropdown under the pill. The desk behind it stays sharp — the frost lives in the card itself,
+     * sampled from the desk pixels it covers, so it reads as glass without turning the whole screen
+     * into a blurred screenshot. The window is still full-screen so a tap anywhere can close it.
      */
     private PopupWindow floatingOver(View content, View anchor, int minWidthDp) {
-        // A notice mid-flight would be baked into the still behind the panel; the dot keeps the state.
+        return floatingOver(content, anchor, minWidthDp, 0, 0);
+    }
+
+    private PopupWindow floatingOver(View content, View anchor, int minWidthDp,
+                                     int tintTop, int tintBottom) {
+        // A notice mid-flight would be baked into the glass behind the panel; the dot keeps the state.
         if (updateBanner != null) updateBanner.setVisibility(View.GONE);
         content.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         int screenW = getResources().getDisplayMetrics().widthPixels;
@@ -2395,26 +2452,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 (int) (screenW * 0.72f));
 
         FrameLayout frame = new FrameLayout(this);
-        Bitmap back = blurredDesk();
-        if (back != null) {
-            ImageView bg = new ImageView(this);
-            bg.setScaleType(ImageView.ScaleType.FIT_XY);
-            bg.setImageBitmap(back);
-            frame.addView(bg, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        }
-        View scrim = new View(this);
-        scrim.setBackgroundColor(0x73000000);
-        frame.addView(scrim, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         int[] at = new int[2];
         anchor.getLocationInWindow(at);
         int top = at[1] + anchor.getHeight() + (int) (10 * density);
         int right = Math.max(0, screenW - at[0] - anchor.getWidth());
         int room = screenH - top - (int) (22 * density);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(width,
-                Math.min(content.getMeasuredHeight(), Math.max(room, (int) (120 * density))),
+        int height = Math.min(content.getMeasuredHeight(), Math.max(room, (int) (120 * density)));
+
+        if (tintTop != 0) {
+            Bitmap crop = deskCrop(screenW - right - width, top, width, height);
+            content.setBackground(new FrostDrawable(crop, 22 * density, tintTop, tintBottom));
+        }
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(width, height,
                 Gravity.TOP | Gravity.END);
         lp.topMargin = top;
         lp.rightMargin = right;
@@ -2430,18 +2481,103 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         return popup;
     }
 
+    /** The desk is sampled at a sixth of its size; glass only ever sees this blurred copy. */
+    private static final int BLUR_SCALE = 6;
+
     private Bitmap blurredDesk() {
         try {
-            int w = Math.max(1, root.getWidth() / 6), h = Math.max(1, root.getHeight() / 6);
+            int w = Math.max(1, root.getWidth() / BLUR_SCALE);
+            int h = Math.max(1, root.getHeight() / BLUR_SCALE);
             Bitmap small = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
             Canvas canvas = new Canvas(small);
-            canvas.scale(1f / 6, 1f / 6);
+            canvas.scale(1f / BLUR_SCALE, 1f / BLUR_SCALE);
             root.draw(canvas);
             boxBlur(small, 5);
             return small;
         } catch (Throwable t) {
-            // A firmware that refuses to draw the frame just gets the plain scrim.
+            // A firmware that refuses to draw the frame just gets the tint without the blur.
             return null;
+        }
+    }
+
+    /** The part of the blurred desk that sits under a panel, in panel pixel coordinates. */
+    private Bitmap deskCrop(int left, int top, int width, int height) {
+        Bitmap back = blurredDesk();
+        if (back == null || width <= 0 || height <= 0) return null;
+        try {
+            int x = Math.max(0, left / BLUR_SCALE);
+            int y = Math.max(0, top / BLUR_SCALE);
+            int w = Math.min(back.getWidth() - x, Math.max(1, width / BLUR_SCALE));
+            int h = Math.min(back.getHeight() - y, Math.max(1, height / BLUR_SCALE));
+            return Bitmap.createBitmap(back, x, y, w, h);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * A panel's own pane: the blurred desk pixels it covers, a tint over them, and a hairline rim.
+     * Drawing the shader through a round rect keeps the corners antialiased on every API level,
+     * where clipPath would leave them ragged.
+     */
+    private static final class FrostDrawable extends Drawable {
+
+        private final Paint pane = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Paint tint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+        private final float radius;
+        private final float stroke;
+        private final int tintTop, tintBottom;
+        private final BitmapShader shader;
+        private final int cropW, cropH;
+
+        FrostDrawable(Bitmap crop, float radius, int tintTop, int tintBottom) {
+            this.radius = radius;
+            this.tintTop = tintTop;
+            this.tintBottom = tintBottom;
+            stroke = Math.max(1f, radius / 16f);
+            if (crop != null) {
+                cropW = crop.getWidth();
+                cropH = crop.getHeight();
+                shader = new BitmapShader(crop, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                pane.setShader(shader);
+            } else {
+                cropW = cropH = 0;
+                shader = null;
+            }
+            rim.setStyle(Paint.Style.STROKE);
+            rim.setStrokeWidth(stroke);
+            rim.setColor(0x33000000);
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            rect.set(getBounds());
+            if (shader != null) {
+                Matrix scale = new Matrix();
+                scale.setScale(rect.width() / cropW, rect.height() / cropH);
+                shader.setLocalMatrix(scale);
+                canvas.drawRoundRect(rect, radius, radius, pane);
+            }
+            tint.setShader(new LinearGradient(rect.left, rect.top, rect.left, rect.bottom,
+                    tintTop, tintBottom, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(rect, radius, radius, tint);
+            rect.inset(stroke / 2f, stroke / 2f);
+            canvas.drawRoundRect(rect, radius, radius, rim);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter cf) {
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
         }
     }
 
@@ -2477,17 +2613,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         }
     }
 
-    /** Drop in: fade and unfold from the top edge, hanging under the anchor. */
-    /** Same unfold, but the popup itself is full-screen and the content is placed by its layout. */
+    /** Drop down from under the pill. The content is placed by the full-screen popup's layout, so
+     *  this only slides and fades it; the desk around it never moves or dims. */
     private void riseIn(PopupWindow popup, View panel, View anchor) {
-        panel.setAlpha(0f);
-        panel.setTranslationY(-8 * density);
-        popup.showAtLocation(anchor, Gravity.TOP | Gravity.START, 0, 0);
-        if (reducedMotion) {
-            panel.setAlpha(1f);
-            panel.setTranslationY(0f);
-            return;
+        if (!reducedMotion) {
+            panel.setAlpha(0f);
+            panel.setTranslationY(-20 * density);
         }
+        popup.showAtLocation(anchor, Gravity.TOP | Gravity.START, 0, 0);
+        if (reducedMotion) return;
         panel.animate().alpha(1f).translationY(0f).setDuration(200)
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
     }
@@ -2703,7 +2837,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private void checkAccessibility() {
         android.content.SharedPreferences prefs = getSharedPreferences("desk", MODE_PRIVATE);
         if (accessibilityEnabled()) {
-            prefs.edit().putBoolean("a11y_was_on", true).putBoolean("a11y_prompted", false).apply();
+            prefs.edit().putBoolean("a11y_was_on", true).putBoolean("a11y_prompted", false)
+                    .putBoolean("a11y_jumped", false).apply();
             return;
         }
         if (a11yPromptedThisRun) return;
@@ -2711,11 +2846,28 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (!wasOn && prefs.getBoolean("a11y_prompted", false)) return;
         a11yPromptedThisRun = true;
         prefs.edit().putBoolean("a11y_prompted", true).apply();
-        if (wasOn) Errors.record("a11y", "accessibility service turned off");
-        showAccessibilityLost(wasOn);
+        if (!wasOn) {
+            showAccessibilityLost(false);
+            return;
+        }
+        Errors.record("a11y", "accessibility service turned off");
+        // Every update turns the service off. Go straight to the switch once instead of asking;
+        // a second jump would yank the owner out of whatever they opened the desk for, so after
+        // that the popup returns and they can pick "later" without being overruled.
+        if (!prefs.getBoolean("a11y_jumped", false)
+                && DeviceProfile.get(this).accessibilitySettings) {
+            prefs.edit().putBoolean("a11y_jumped", true).apply();
+            open(systemIntent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            return;
+        }
+        showAccessibilityLost(true);
     }
 
     private void showAccessibilityLost(boolean wasOn) {
+        if (!DeviceProfile.get(this).accessibilitySettings) {
+            showAccessibilityGuide();
+            return;
+        }
         if (isFinishing() || (updatePanel != null && updatePanel.isShowing())) return;
         // onResume runs before the decor window is attached; a popup shown right there has no token
         // and WindowManager kills the activity (BadTokenException on API 23). Wait one turn.
@@ -2744,6 +2896,38 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             open(systemIntent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
         });
         later.setOnClickListener(v -> popup.dismiss());
+        popup.showAtLocation(root, Gravity.CENTER, 0, 0);
+        panel.post(go::requestFocus);
+    }
+
+    /**
+     * The set has no Accessibility page (Skyworth 8R710, see {@link DeviceProfile}), so the usual
+     * "turn it on" button would open a dead AOSP stub. Show the adb lines instead — someone at the
+     * TV reads them off and runs them once from a computer.
+     */
+    private void showAccessibilityGuide() {
+        if (isFinishing() || (updatePanel != null && updatePanel.isShowing())) return;
+        if (root.getWindowToken() == null) {
+            root.post(this::showAccessibilityGuide);
+            return;
+        }
+        View panel = getLayoutInflater().inflate(R.layout.popup_update, root, false);
+        ((TextView) panel.findViewById(R.id.updateTitle)).setText(R.string.a11y_guide_title);
+        TextView notes = panel.findViewById(R.id.updateNotes);
+        notes.setText(R.string.a11y_guide_notes);
+        notes.setMaxLines(Integer.MAX_VALUE);
+        notes.setEllipsize(null);
+        panel.findViewById(R.id.updateStatus).setVisibility(View.GONE);
+        TextView go = panel.findViewById(R.id.updateGo);
+        go.setText(R.string.a11y_guide_ok);
+        panel.findViewById(R.id.updateLater).setVisibility(View.GONE);
+
+        final PopupWindow popup = new PopupWindow(panel,
+                Math.min(dp(560), (int) (getResources().getDisplayMetrics().widthPixels * 0.82f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        go.setOnClickListener(v -> popup.dismiss());
         popup.showAtLocation(root, Gravity.CENTER, 0, 0);
         panel.post(go::requestFocus);
     }
@@ -2853,8 +3037,38 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     // ---- control centre --------------------------------------------------------------------------
 
+    /** A top-bar pill: bare glyph at rest, frosted square and full brightness while focused. */
+    private void stylePill(final View pill, final View glass, View.OnKeyListener keys) {
+        if (pill == null) return;
+        pill.setOnKeyListener(keys);
+        pill.setAlpha(0.8f);
+        pill.setOnFocusChangeListener((v, hasFocus) -> {
+            pill.setAlpha(hasFocus ? 1f : 0.8f);
+            if (glass == null) return;
+            glass.animate().cancel();
+            if (hasFocus) {
+                glass.setScaleX(0.92f);
+                glass.setScaleY(0.92f);
+                if (reducedMotion) {
+                    glass.setAlpha(1f);
+                    glass.setScaleX(1f);
+                    glass.setScaleY(1f);
+                } else {
+                    glass.animate().alpha(1f).scaleX(1f).scaleY(1f)
+                            .setDuration(200)
+                            .setInterpolator(new OvershootInterpolator(1.4f)).start();
+                }
+            } else if (reducedMotion) {
+                glass.setAlpha(0f);
+            } else {
+                glass.animate().alpha(0f).scaleX(0.92f).scaleY(0.92f)
+                        .setDuration(140).start();
+            }
+        });
+    }
+
     /**
-     * The macOS-style panel: network and Bluetooth switches, volume and brightness sliders, and the
+     * The macOS-style panel: network and Bluetooth switches, the volume slider, and the
      * three places this remote otherwise buries (inputs, TV settings, casting).
      */
     private void showControlCenter() {
@@ -2869,88 +3083,57 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         LinearLayout shortcuts = panel.findViewById(R.id.shortcuts);
         GlideBackdrop tilesGlide = panel.findViewById(R.id.tilesGlide);
         tilesGlide.setOval();
-        GlideBackdrop rowsGlide = panel.findViewById(R.id.rowsGlide);
-        rowsGlide.setRadiusDp(26);
+        tilesGlide.setLight();
 
         // The four places people actually go, as round glass tiles. These used to be three separate
         // pills in the top bar; one glass entry that opens this sheet is the tvOS arrangement.
+        // Wi-Fi is its own pill beside this one, so it is not repeated here.
         addTile(tiles, R.drawable.ic_input, getString(R.string.inputs), this::showInputs);
         addTile(tiles, R.drawable.ic_wallpaper, getString(R.string.wallpaper), this::showWallpaperPicker);
         addTile(tiles, R.drawable.ic_dock, getString(R.string.favourites), this::showDockPicker);
         addTile(tiles, R.drawable.ic_settings, getString(R.string.tv_settings),
                 () -> open(tvSettingsIntent(this)));
 
-        // Network and Bluetooth open a detail sheet instead of flipping the radio in place: on a TV
-        // remote a stray OK used to take the whole house off Wi-Fi.
-        addControlRow(rows, R.drawable.ic_wifi, getString(R.string.network),
-                networkSubtitle(), () -> {
-                    if (controlPanel != null) controlPanel.dismiss();
-                    showNetworkDetails();
-                });
+        // Bluetooth opens a detail sheet instead of flipping the radio in place: on a TV remote a
+        // stray OK used to take the whole house off Bluetooth.
         if (bluetoothAdapter() != null) {
             addControlRow(rows, R.drawable.ic_bluetooth, getString(R.string.bluetooth),
                     bluetoothSubtitle(), () -> {
                         if (controlPanel != null) controlPanel.dismiss();
                         showBluetoothDetails();
-                    });
+                    }, true);
         }
 
-        // Below 23 WRITE_SETTINGS is granted at install time, so there is nothing to ask for.
-        if (Build.VERSION.SDK_INT < 23 || Settings.System.canWrite(this)) {
-            int brightness = 128;
-            try {
-                brightness = Settings.System.getInt(getContentResolver(),
-                        Settings.System.SCREEN_BRIGHTNESS, 128);
-            } catch (Exception ignored) {
-            }
-            addSlider(sliders, R.drawable.ic_brightness, getString(R.string.brightness),
-                    5, 255, brightness, false);
-        } else {
-            addShortcutRow(rows, R.drawable.ic_brightness,
-                    getString(R.string.brightness_permission),
-                    () -> open(new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS)
-                            .setData(Uri.parse("package:" + getPackageName()))));
-        }
-
+        // Volume only: the panel backlight on this class of TV is driven by the vendor's own chip
+        // service, so SCREEN_BRIGHTNESS writes move the setting without changing the picture.
         AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         if (am != null) {
             int max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             int current = am.getStreamVolume(AudioManager.STREAM_MUSIC);
-            addSlider(sliders, R.drawable.ic_volume, getString(R.string.volume), 0, max, current, true);
+            addSlider(sliders, R.drawable.ic_volume, getString(R.string.volume), max, current);
         }
 
-        // A row of compact pills instead of full-width rows: three tall rows pushed the volume
-        // slider off the bottom of a 1080p screen once the modules started floating on the blur.
-        // Its own backdrop, like the rows above, so the selection slides between the pills too.
-        GlideBackdrop pillGlide = new GlideBackdrop(this, null);
-        pillGlide.setRadiusDp(19);
-        FrameLayout pillBox = new FrameLayout(this);
-        pillBox.addView(pillGlide, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        LinearLayout shortcutRow = new LinearLayout(this);
-        shortcutRow.setOrientation(LinearLayout.HORIZONTAL);
-        pillBox.addView(shortcutRow, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        shortcuts.addView(pillBox, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // Two rows of two: four across squeezed the labels down to "检…" on a 720p set.
+        LinearLayout pillRowOne = addPillRow(shortcuts);
         Intent cast = castIntent(this);
         if (cast != null) {
-            addShortcutPill(shortcutRow, R.drawable.ic_cast, getString(R.string.quick_cast),
+            addShortcutPill(pillRowOne, R.drawable.ic_cast, getString(R.string.quick_cast),
                     () -> open(cast));
         }
         // With a build already found, this opens its details straight away; otherwise it is a check.
-        addShortcutPill(shortcutRow, R.drawable.ic_update, getString(R.string.check_update),
+        addShortcutPill(pillRowOne, R.drawable.ic_update, getString(R.string.check_update),
                 this::openPendingUpdate, updateUnread());
+        LinearLayout pillRowTwo = addPillRow(shortcuts);
         // Only a beta install carries the way back to stable; the stable desk never needs it.
         if (BuildConfig.CHANNEL.equals("beta")) {
-            addShortcutPill(shortcutRow, R.drawable.ic_update, getString(R.string.stable_switch),
+            addShortcutPill(pillRowTwo, R.drawable.ic_update, getString(R.string.stable_switch),
                     this::switchToStable);
         }
-        addShortcutPill(shortcutRow, R.drawable.ic_send, getString(R.string.feedback_send),
+        addShortcutPill(pillRowTwo, R.drawable.ic_send, getString(R.string.feedback_send),
                 this::sendFeedback);
 
-        // The items go transparent and hand their dark pill to the backdrop; the backdrop also
-        // draws the white selection, so focus can travel instead of popping between items.
+        // The items go transparent and hand their disc to the backdrop; the backdrop also draws
+        // the selection, so focus can travel instead of popping between items.
         List<View> tileIcons = new ArrayList<>(tiles.getChildCount());
         for (int i = 0; i < tiles.getChildCount(); i++) {
             View tile = tiles.getChildAt(i);
@@ -2959,26 +3142,33 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             icon.setBackground(null);
             tileIcons.add(icon);
         }
-        List<View> rowItems = new ArrayList<>(rows.getChildCount());
-        for (int i = 0; i < rows.getChildCount(); i++) {
-            View row = rows.getChildAt(i);
-            row.setBackground(null);
-            row.setTag(rowsGlide);
-            rowItems.add(row);
-        }
-        List<View> pillItems = new ArrayList<>(shortcutRow.getChildCount());
-        for (int i = 0; i < shortcutRow.getChildCount(); i++) {
-            View pill = shortcutRow.getChildAt(i);
-            pill.setBackground(null);
-            pill.setTag(pillGlide);
-            pillItems.add(pill);
-        }
         watchGlide((ViewGroup) tiles.getParent(), tilesGlide, tileIcons);
-        watchGlide((ViewGroup) rows.getParent(), rowsGlide, rowItems);
-        watchGlide(pillBox, pillGlide, pillItems);
+        for (int i = 0; i < shortcuts.getChildCount(); i++) {
+            FrameLayout box = (FrameLayout) shortcuts.getChildAt(i);
+            LinearLayout row = (LinearLayout) box.getChildAt(1);
+            GlideBackdrop glide = (GlideBackdrop) row.getTag();
+            List<View> items = new ArrayList<>(row.getChildCount());
+            boolean pair = row.getChildCount() > 1;
+            for (int j = 0; j < row.getChildCount(); j++) {
+                View pill = row.getChildAt(j);
+                pill.setBackground(null);
+                pill.setTag(glide);
+                if (pair) {
+                    // Two pills share the row evenly; a lone pill keeps its natural width instead
+                    // of stretching across the whole sheet.
+                    LinearLayout.LayoutParams lp =
+                            (LinearLayout.LayoutParams) pill.getLayoutParams();
+                    lp.width = 0;
+                    lp.weight = 1f;
+                    pill.setLayoutParams(lp);
+                }
+                items.add(pill);
+            }
+            watchGlide(box, glide, items);
+        }
 
         View anchor = findViewById(R.id.btnControl);
-        controlPanel = floatingOver(panel, anchor, 340);
+        controlPanel = floatingOver(panel, anchor, 340, 0x73FFFFFF, 0x59FFFFFF);
         riseIn(controlPanel, panel, anchor);
         panel.post(() -> {
             if (tiles.getChildCount() > 0) tiles.getChildAt(0).requestFocus();
@@ -3021,14 +3211,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         else if (glide.focused() == at) glide.unfocus();
     }
 
-    /** A wide pill ending in a detail sheet: glyph in a white disc, title, one line of state. */
+    /** A wide pill ending in a detail sheet: glyph in a disc, title, one line of state. */
     private View addControlRow(LinearLayout rows, int iconRes, String title, String subtitle,
                                Runnable action) {
+        return addControlRow(rows, iconRes, title, subtitle, action, false);
+    }
+
+    /** [light] rows use the Wi-Fi sheet's language: grey wash on focus, ink text on the pane. */
+    private View addControlRow(LinearLayout rows, int iconRes, String title, String subtitle,
+                               Runnable action, boolean light) {
         View row = getLayoutInflater().inflate(R.layout.item_control_row, rows, false);
         ImageView icon = row.findViewById(R.id.icon);
         icon.setImageResource(iconRes);
-        icon.setColorFilter(0xFF1A1A1A, PorterDuff.Mode.SRC_IN);
-        ((TextView) row.findViewById(R.id.title)).setText(title);
+        TextView titleView = row.findViewById(R.id.title);
+        titleView.setText(title);
         TextView sub = row.findViewById(R.id.subtitle);
         if (subtitle == null || subtitle.isEmpty()) {
             sub.setVisibility(View.GONE);
@@ -3036,15 +3232,28 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             sub.setText(subtitle);
         }
         ImageView chevron = row.findViewById(R.id.chevron);
+        if (light) {
+            row.setBackgroundResource(R.drawable.wifi_row_bg);
+            row.findViewById(R.id.iconDisc).setBackgroundResource(R.drawable.wifi_disc);
+            icon.setColorFilter(0xFF111114, PorterDuff.Mode.SRC_IN);
+            titleView.setTextColor(0xFF111114);
+            sub.setTextColor(0xFF6E6E73);
+            chevron.setColorFilter(0xFF9A9AA0, PorterDuff.Mode.SRC_IN);
+        } else {
+            icon.setColorFilter(0xFF1A1A1A, PorterDuff.Mode.SRC_IN);
+        }
         if (action == null) {
             // A plain fact line: the remote skips it and there is nowhere to go.
             row.setFocusable(false);
             row.setClickable(false);
             chevron.setVisibility(View.GONE);
         } else {
-            chevron.setColorFilter(0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+            if (!light) chevron.setColorFilter(0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
             row.setOnFocusChangeListener((v, hasFocus) -> {
-                chevron.setColorFilter(hasFocus ? 0xFF111111 : 0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+                if (!light) {
+                    chevron.setColorFilter(hasFocus ? 0xFF111111 : 0xFFFFFFFF,
+                            PorterDuff.Mode.SRC_IN);
+                }
                 glideFocus(v, hasFocus, rows);
             });
             row.setOnClickListener(v -> action.run());
@@ -3053,18 +3262,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         return row;
     }
 
-    /** One line for the Wi-Fi pill: the network name, or "not connected". */
-    private String networkSubtitle() {
-        try {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wm != null && wm.isWifiEnabled()) {
-                String ssid = ssidOf(wm.getConnectionInfo());
-                if (ssid != null) return ssid;
-                return getString(R.string.network_off);
-            }
-        } catch (Exception ignored) {
-        }
-        return getString(R.string.network_off);
+    /** A light row that closes the panel and goes somewhere. */
+    private void addLightShortcutRow(LinearLayout rows, int iconRes, String title, Runnable action) {
+        addControlRow(rows, iconRes, title, null, () -> {
+            if (controlPanel != null) controlPanel.dismiss();
+            action.run();
+        }, true);
     }
 
     private static String ssidOf(WifiInfo info) {
@@ -3076,45 +3279,394 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         return ssid;
     }
 
-    private static String ipv4(int ip) {
-        if (ip == 0) return "-";
-        return (ip & 0xFF) + "." + ((ip >> 8) & 0xFF) + "." + ((ip >> 16) & 0xFF) + "."
-                + ((ip >> 24) & 0xFF);
-    }
+    /** The light sheet on screen, so a scan that lands late can refill it instead of closing it. */
+    private LinearLayout wifiRows;
+    private ToggleView wifiToggle;
+    private View wifiSheet;
 
-    private String signalLabel(int rssi) {
-        if (rssi >= -60) return getString(R.string.signal_strong) + " (" + rssi + " dBm)";
-        if (rssi >= -70) return getString(R.string.signal_ok) + " (" + rssi + " dBm)";
-        return getString(R.string.signal_weak) + " (" + rssi + " dBm)";
-    }
-
-    /** Network facts, and one way out to the system page. No radio flipping from the remote here. */
+    /**
+     * Wi-Fi sheet: what is connected, personal hotspots, saved networks, everything else. Scanning
+     * needs the location grant on Android 6 and up; without it the sheet still lists the saved
+     * networks and offers the system page, because a TV in a wall does not always get asked nicely.
+     */
     private void showNetworkDetails() {
-        showDetail(R.string.network, rows -> {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            boolean on = false;
-            WifiInfo info = null;
+        final WifiManager wm = (WifiManager) getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
+        if (wm == null) {
+            toast(getString(R.string.not_available));
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(
+                android.Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            wifiPanelAfterGrant = true;
+            requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION},
+                    REQ_WIFI_SCAN);
+            return;
+        }
+        boolean empty = scanResults(wm).isEmpty();
+        buildWifiPanel(wm);
+        try {
+            wm.startScan();
+        } catch (Exception ignored) {
+        }
+        handler.removeCallbacks(wifiRescan);
+        // Redraw once the radio has answered, but only on a first open where there was nothing
+        // to show: reopening the sheet under someone who already moved focus is the worse trade.
+        if (empty) handler.postDelayed(wifiRescan, 2000);
+    }
+
+    private final Runnable wifiRescan = () -> {
+        // Refill the rows in place: dismissing and rebuilding would close the sheet and lose focus.
+        if (detailPanel == null || !detailPanel.isShowing()) return;
+        WifiManager wm = (WifiManager) getApplicationContext()
+                .getSystemService(Context.WIFI_SERVICE);
+        if (wm == null || wifiRows == null) return;
+        boolean onSwitch = wifiToggle != null && wifiToggle.isFocused();
+        fillWifiRows(wm, wifiRows);
+        if (wifiToggle != null) wifiToggle.setOn(wifiEnabled(wm));
+        // Replacing the rows drops whatever row had focus; put it back where the user was.
+        if (onSwitch) {
+            if (wifiToggle != null) wifiToggle.requestFocus();
+        } else {
+            View first = firstFocusable(wifiRows);
+            if (first != null) first.requestFocus();
+        }
+    };
+
+    /** Visible networks, one entry per SSID (the strongest/duplicated rows say nothing new). */
+    @SuppressLint("MissingPermission")
+    private List<ScanResult> scanResults(WifiManager wm) {
+        List<ScanResult> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        try {
+            for (ScanResult r : wm.getScanResults()) {
+                if (r == null || r.SSID == null || r.SSID.isEmpty()) continue;
+                if (seen.add(r.SSID)) out.add(r);
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    /**
+     * A light frosted pane pinned under the Wi-Fi pill: switch in the header, then hotspots, saved
+     * networks and everything else, each row a glyph disc, a name and a lock or signal bars.
+     */
+    private void buildWifiPanel(final WifiManager wm) {
+        if (detailPanel != null && detailPanel.isShowing()) {
+            detailPanel.dismiss();
+            return;
+        }
+        View panel = getLayoutInflater().inflate(R.layout.popup_wifi, root, false);
+        wifiSheet = panel;
+        wifiRows = panel.findViewById(R.id.wifiRows);
+        wifiToggle = panel.findViewById(R.id.wifiToggle);
+        wifiToggle.setOn(wifiEnabled(wm));
+        wifiToggle.setOnClickListener(v -> {
+            final boolean want = !wifiToggle.isOn();
+            wifiToggle.setOn(want);
+            boolean ok = false;
             try {
-                on = wm != null && wm.isWifiEnabled();
-                info = wm != null ? wm.getConnectionInfo() : null;
+                ok = wm.setWifiEnabled(want);
             } catch (Exception ignored) {
             }
-            String ssid = ssidOf(info);
-            addControlRow(rows, R.drawable.ic_wifi, getString(R.string.current_network),
-                    !on ? getString(R.string.network_off)
-                            : (ssid != null ? ssid : getString(R.string.connected)), null);
-            addControlRow(rows, R.drawable.ic_wifi, getString(R.string.ip_address),
-                    ipv4(info != null ? info.getIpAddress() : 0), null);
-            if (on && info != null && info.getRssi() != 0) {
-                addControlRow(rows, R.drawable.ic_wifi, getString(R.string.signal),
-                        signalLabel(info.getRssi()), null);
+            // Android 10+ refuses for anything targeting it; there the system page is the only way.
+            if (!ok) {
+                wifiToggle.setOn(!want);
+                openWifiSettings();
+                return;
             }
-            addControlRow(rows, R.drawable.ic_settings, getString(R.string.open_network_settings), null,
-                    () -> {
-                        dismissDetail();
-                        open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
-                    });
+            final LinearLayout rows = wifiRows;
+            handler.postDelayed(() -> {
+                if (detailPanel != null && detailPanel.isShowing() && rows == wifiRows) {
+                    fillWifiRows(wm, rows);
+                    wifiToggle.setOn(wifiEnabled(wm));
+                }
+            }, 1500);
         });
+
+        // The dark icons in the layout are tinted here: android:tint on a drawable is API 21.
+        panel.<ImageView>findViewById(R.id.wifiFooterIcon)
+                .setColorFilter(0xFF111114, PorterDuff.Mode.SRC_IN);
+        panel.<ImageView>findViewById(R.id.wifiFooterChevron)
+                .setColorFilter(0xFF9A9AA0, PorterDuff.Mode.SRC_IN);
+        panel.findViewById(R.id.wifiFooter).setOnClickListener(v -> openWifiSettings());
+
+        // A scan on demand: some ROMs throttle the scan that runs when the sheet opens, and a
+        // network that appeared since then would otherwise never show up without reopening.
+        final TextView scanLabel = panel.findViewById(R.id.wifiScanLabel);
+        panel.<ImageView>findViewById(R.id.wifiScanIcon)
+                .setColorFilter(0xFF111114, PorterDuff.Mode.SRC_IN);
+        panel.findViewById(R.id.wifiScanRow).setOnClickListener(v -> {
+            if (!wifiEnabled(wm)) {
+                toast(getString(R.string.wifi_off));
+                return;
+            }
+            scanLabel.setText(R.string.wifi_scanning);
+            try {
+                wm.startScan();
+            } catch (Exception ignored) {
+            }
+            handler.postDelayed(() -> {
+                if (detailPanel == null || !detailPanel.isShowing() || panel != wifiSheet) return;
+                fillWifiRows(wm, wifiRows);
+                scanLabel.setText(R.string.wifi_scan);
+                if (scanResults(wm).isEmpty()) toast(getString(R.string.wifi_no_new));
+            }, 2500);
+        });
+
+        fillWifiRows(wm, wifiRows);
+
+        View anchor = findViewById(R.id.btnWifi);
+        detailPanel = floatingOver(panel, anchor, 330, 0x73FFFFFF, 0x59FFFFFF);
+        riseIn(detailPanel, panel, anchor);
+        panel.post(() -> {
+            View first = firstFocusable(wifiRows);
+            View target = first != null ? first : wifiToggle;
+            // In touch mode a plain focusable refuses focus; the touch request still aims the remote.
+            if (!target.requestFocus()) target.requestFocusFromTouch();
+        });
+    }
+
+    private void openWifiSettings() {
+        dismissDetail();
+        open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+    }
+
+    private static boolean wifiEnabled(WifiManager wm) {
+        try {
+            return wm.isWifiEnabled();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static View firstFocusable(ViewGroup group) {
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View v = group.getChildAt(i);
+            if (v.isFocusable()) return v;
+            if (v instanceof ViewGroup) {
+                View inner = firstFocusable((ViewGroup) v);
+                if (inner != null) return inner;
+            }
+        }
+        return null;
+    }
+
+    private void fillWifiRows(final WifiManager wm, LinearLayout rows) {
+        rows.removeAllViews();
+        if (!wifiEnabled(wm)) {
+            addWifiHint(rows, getString(R.string.wifi_off));
+            return;
+        }
+        String ssid = null;
+        int rssi = -127;
+        try {
+            WifiInfo info = wm.getConnectionInfo();
+            ssid = ssidOf(info);
+            if (info != null) rssi = info.getRssi();
+        } catch (Exception ignored) {
+        }
+
+        // Saved networks by name, with the id the switch needs.
+        Map<String, Integer> saved = new LinkedHashMap<>();
+        try {
+            List<WifiConfiguration> cfg = wm.getConfiguredNetworks();
+            if (cfg != null) {
+                for (WifiConfiguration c : cfg) {
+                    String n = c.SSID == null ? null : c.SSID.replace("\"", "").trim();
+                    if (n != null && !n.isEmpty()) saved.put(n, c.networkId);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        // Android 10+ hides the saved list, even the network in use. The connection is the truth.
+        if (ssid != null && !saved.containsKey(ssid)) saved.put(ssid, -1);
+
+        List<ScanResult> hotspots = new ArrayList<>();
+        List<ScanResult> others = new ArrayList<>();
+        for (ScanResult r : scanResults(wm)) {
+            // The network in use is in the saved section; some ROMs also list it in the scan.
+            if (r.SSID.equals(ssid) || saved.containsKey(r.SSID)) continue;
+            if (looksLikeHotspot(r.SSID)) hotspots.add(r);
+            else others.add(r);
+        }
+
+        // A phone's hotspot is what people reach for when the house Wi-Fi is down, so it comes first.
+        if (!hotspots.isEmpty()) {
+            addWifiSection(rows, getString(R.string.wifi_hotspots));
+            for (ScanResult r : hotspots) {
+                addWifiRow(rows, R.drawable.ic_link, r.SSID, r.level, false, false,
+                        this::openWifiSettings);
+            }
+        }
+        if (!saved.isEmpty()) {
+            addWifiSection(rows, getString(R.string.wifi_known));
+            for (final Map.Entry<String, Integer> e : saved.entrySet()) {
+                final String name = e.getKey();
+                final int netId = e.getValue();
+                boolean here = name.equals(ssid);
+                addWifiRow(rows, R.drawable.ic_wifi, name, here ? rssi : -127, true, here,
+                        netId >= 0 && !here ? () -> connectSaved(wm, netId, name)
+                                : this::openWifiSettings);
+            }
+        }
+        if (!others.isEmpty()) {
+            addWifiSection(rows, getString(R.string.wifi_other));
+            for (ScanResult r : others) {
+                addWifiRow(rows, R.drawable.ic_wifi, r.SSID, r.level, false, false,
+                        this::openWifiSettings);
+            }
+        }
+        if (hotspots.isEmpty() && saved.isEmpty() && others.isEmpty()) {
+            addWifiHint(rows, getString(R.string.wifi_no_networks));
+        }
+        wireWifiFocus(rows);
+    }
+
+    /**
+     * One column of rows between the switch and the settings footer. Focus search alone walks out
+     * of the popup on UP, so the ends of the column are wired by hand.
+     */
+    private void wireWifiFocus(LinearLayout rows) {
+        View first = null, last = null;
+        int id = 4000;
+        for (int i = 0; i < rows.getChildCount(); i++) {
+            View v = rows.getChildAt(i);
+            if (!v.isFocusable()) continue;
+            v.setId(++id);
+            v.setNextFocusLeftId(v.getId());
+            v.setNextFocusRightId(v.getId());
+            if (first == null) first = v;
+            last = v;
+        }
+        View footer = wifiSheet == null ? null : wifiSheet.findViewById(R.id.wifiFooter);
+        View scan = wifiSheet == null ? null : wifiSheet.findViewById(R.id.wifiScanRow);
+        int afterRows = scan != null ? R.id.wifiScanRow : R.id.wifiFooter;
+        if (wifiToggle != null) {
+            wifiToggle.setNextFocusDownId(first != null ? first.getId() : afterRows);
+        }
+        if (first != null && wifiToggle != null) first.setNextFocusUpId(wifiToggle.getId());
+        if (last != null) last.setNextFocusDownId(afterRows);
+        if (scan != null) {
+            scan.setNextFocusUpId(last != null ? last.getId()
+                    : wifiToggle != null ? wifiToggle.getId() : R.id.wifiScanRow);
+            scan.setNextFocusDownId(R.id.wifiFooter);
+        }
+        if (footer != null) {
+            footer.setNextFocusUpId(scan != null ? R.id.wifiScanRow
+                    : last != null ? last.getId()
+                    : wifiToggle != null ? wifiToggle.getId() : R.id.wifiFooter);
+        }
+    }
+
+    /** A heading inside the sheet: not focusable, so the remote skips straight to the rows. */
+    private void addWifiSection(LinearLayout rows, String text) {
+        TextView h = new TextView(this);
+        h.setText(text);
+        h.setTextColor(0xFF6E6E73);
+        h.setTextSize(13);
+        h.setPadding(dp(14), dp(12), dp(14), dp(4));
+        h.setFocusable(false);
+        rows.addView(h);
+    }
+
+    private void addWifiHint(LinearLayout rows, String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(0xFF8E8E93);
+        t.setTextSize(14);
+        t.setPadding(dp(14), dp(16), dp(14), dp(16));
+        t.setFocusable(false);
+        rows.addView(t);
+    }
+
+    /** One network line: disc glyph, name, then a lock or the signal bars. The whole row is the button. */
+    private void addWifiRow(LinearLayout rows, int iconRes, String name, int rssi,
+                            boolean savedNet, boolean connected, final Runnable action) {
+        // Hairline between neighbours in the same section, inset to start after the glyph.
+        if (rows.getChildCount() > 0
+                && rows.getChildAt(rows.getChildCount() - 1).isFocusable()) {
+            View line = new View(this);
+            line.setBackgroundColor(0x14000000);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 1);
+            lp.setMargins(dp(54), 0, 0, 0);
+            rows.addView(line, lp);
+        }
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), 0, dp(12), 0);
+        row.setBackgroundResource(R.drawable.wifi_row_bg);
+        row.setFocusable(true);
+        row.setClickable(true);
+        row.setOnClickListener(v -> action.run());
+        rows.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(iconRes);
+        icon.setBackgroundResource(connected ? R.drawable.wifi_disc_on : R.drawable.wifi_disc);
+        int pad = dp(7);
+        icon.setPadding(pad, pad, pad, pad);
+        icon.setColorFilter(connected ? Color.WHITE : 0xFF111114, PorterDuff.Mode.SRC_IN);
+        row.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+
+        TextView label = new TextView(this);
+        label.setText(name);
+        label.setTextColor(0xFF111114);
+        label.setTextSize(15);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp.setMargins(dp(12), 0, dp(8), 0);
+        row.addView(label, lp);
+
+        if (savedNet) {
+            ImageView lock = new ImageView(this);
+            lock.setImageResource(R.drawable.ic_lock);
+            lock.setColorFilter(0xFF9A9AA0, PorterDuff.Mode.SRC_IN);
+            row.addView(lock, new LinearLayout.LayoutParams(dp(14), dp(14)));
+        } else {
+            SignalBars bars = new SignalBars(this);
+            bars.setLevel(signalBars(rssi));
+            row.addView(bars, new LinearLayout.LayoutParams(dp(20), dp(14)));
+        }
+    }
+
+    private static int signalBars(int rssi) {
+        if (rssi >= -55) return 4;
+        if (rssi >= -67) return 3;
+        if (rssi >= -78) return 2;
+        if (rssi >= -88) return 1;
+        return 0;
+    }
+
+    private void connectSaved(WifiManager wm, int netId, String name) {
+        dismissDetail();
+        try {
+            wm.disconnect();
+            boolean ok = wm.enableNetwork(netId, true);
+            wm.reconnect();
+            toast(ok ? getString(R.string.wifi_connecting, name)
+                    : getString(R.string.not_available));
+        } catch (Exception e) {
+            toast(getString(R.string.not_available));
+        }
+    }
+
+    /** Phone and pocket-router names. The heuristic is deliberately broad; a miss is only a row
+     *  in the next section, not a broken list. */
+    private static final java.util.regex.Pattern HOTSPOT = java.util.regex.Pattern.compile(
+            "(?i).*(iphone|ipad|android|hotspot|personal|随身|口袋|热点|mifi|"
+                    + "redmi|huawei|honor|vivo|oppo|xiaomi|oneplus|realme|meizu).*");
+
+    private static boolean looksLikeHotspot(String ssid) {
+        return ssid != null && HOTSPOT.matcher(ssid).matches();
     }
 
     private BluetoothAdapter bluetoothAdapter() {
@@ -3242,12 +3794,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         ImageView icon = tile.findViewById(R.id.icon);
         icon.setImageResource(iconRes);
         ((TextView) tile.findViewById(R.id.title)).setText(title);
-        // The disc turns near-white when focused, so the white glyph has to invert with it. Tinting
-        // by hand works on the old Android versions where a state-list tint is ignored.
+        // On the light sheet the selection is ink, so the glyph goes from ink to white. Tinting by
+        // hand works on the old Android versions where a state-list tint is ignored.
         tile.setOnFocusChangeListener((v, hasFocus) -> {
-            icon.setColorFilter(hasFocus ? 0xFF111111 : 0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+            icon.setColorFilter(hasFocus ? 0xFFFFFFFF : 0xFF111114, PorterDuff.Mode.SRC_IN);
             glideFocus(v, hasFocus, tiles);
         });
+        icon.setColorFilter(0xFF111114, PorterDuff.Mode.SRC_IN);
         tile.setOnClickListener(v -> {
             if (controlPanel != null) controlPanel.dismiss();
             action.run();
@@ -3255,7 +3808,26 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         tiles.addView(tile);
     }
 
-    /** The compact bottom pill. Icon and label flip to dark with the white focus fill. */
+    /** One row of shortcut pills, with its own sliding selection pane; returns the row to fill. */
+    private LinearLayout addPillRow(LinearLayout parent) {
+        GlideBackdrop glide = new GlideBackdrop(this, null);
+        glide.setRadiusDp(19);
+        glide.setLight();
+        FrameLayout box = new FrameLayout(this);
+        box.addView(glide, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        row.setTag(glide);
+        box.addView(row, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        parent.addView(box, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return row;
+    }
+
+    /** The compact bottom pill. Icon and label flip to white with the ink focus fill. */
     private void addShortcutPill(LinearLayout row, int iconRes, String title, Runnable action) {
         addShortcutPill(row, iconRes, title, action, false);
     }
@@ -3266,7 +3838,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         View pill = getLayoutInflater().inflate(R.layout.item_shortcut_pill, row, false);
         ImageView icon = pill.findViewById(R.id.icon);
         icon.setImageResource(iconRes);
-        icon.setColorFilter(0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+        icon.setColorFilter(0xFF111114, PorterDuff.Mode.SRC_IN);
         ((TextView) pill.findViewById(R.id.label)).setText(title);
         if (unread && pill instanceof LinearLayout) {
             View dot = new View(this);
@@ -3277,7 +3849,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             ((LinearLayout) pill).addView(dot, lp);
         }
         pill.setOnFocusChangeListener((v, hasFocus) -> {
-            icon.setColorFilter(hasFocus ? 0xFF111111 : 0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+            icon.setColorFilter(hasFocus ? 0xFFFFFFFF : 0xFF111114, PorterDuff.Mode.SRC_IN);
             glideFocus(v, hasFocus, row);
         });
         pill.setOnClickListener(v -> {
@@ -3296,68 +3868,69 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     }
 
     /**
-     * A label row plus a slider. Both sliders write live: volume through the audio service, brightness
-     * through the settings provider once the write permission is in place.
+     * One iOS-style capsule slider. It writes live through the audio service. The icon and the
+     * value sit on top of the bar; only the bar itself takes focus, so left/right adjusts it.
      */
     private SeekBar addSlider(LinearLayout parent, int iconRes, String label,
-                              final int min, final int max, int value, final boolean percent) {
-        final int range = Math.max(1, max - min);
+                              final int max, int value) {
+        final int range = Math.max(1, max);
 
-        LinearLayout block = new LinearLayout(this);
-        block.setOrientation(LinearLayout.VERTICAL);
-        block.setPadding(dp(14), dp(4), dp(14), dp(4));
-        block.setBackgroundResource(R.drawable.control_slider_bg);
+        FrameLayout capsule = new FrameLayout(this);
 
-        LinearLayout head = new LinearLayout(this);
-        head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(Gravity.CENTER_VERTICAL);
+        SeekBar bar = new ThickSeekBar(this);
+        bar.setMax(range);
+        bar.setProgress(Math.max(0, Math.min(range, value)));
+        bar.setContentDescription(label);
+        capsule.addView(bar, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         ImageView icon = new ImageView(this);
         icon.setImageResource(iconRes);
-        icon.setColorFilter(0xFFFFFFFF); // setImageTintList is API 21; this works everywhere.
-        head.addView(icon, new LinearLayout.LayoutParams(dp(20), dp(20)));
-
-        TextView title = new TextView(this);
-        title.setText(label);
-        title.setTextColor(0xFFFFFFFF);
-        title.setTextSize(15);
-        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        titleLp.leftMargin = dp(10);
-        head.addView(title, titleLp);
+        icon.setColorFilter(0xFF111114); // setImageTintList is API 21; this works everywhere.
+        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(dp(24), dp(24),
+                Gravity.START | Gravity.CENTER_VERTICAL);
+        iconLp.leftMargin = dp(20);
+        capsule.addView(icon, iconLp);
 
         final TextView valueView = new TextView(this);
-        valueView.setTextColor(0x99FFFFFF);
-        valueView.setTextSize(12);
-        head.addView(valueView);
-        block.addView(head, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(26)));
+        valueView.setTextColor(0xFF111114);
+        valueView.setTextSize(13);
+        valueView.setText(
+                Math.round(Math.max(0, Math.min(range, value)) * 100f / range) + "%");
+        FrameLayout.LayoutParams valueLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.END | Gravity.CENTER_VERTICAL);
+        valueLp.rightMargin = dp(22);
+        capsule.addView(valueView, valueLp);
 
-        SeekBar bar = new SeekBar(this);
-        bar.setMax(range);
-        bar.setProgress(Math.max(0, Math.min(range, value - min)));
-        if (Build.VERSION.SDK_INT >= 21) {
-            bar.setProgressTintList(ColorStateList.valueOf(0xFFFFFFFF));
-            bar.setThumbTintList(ColorStateList.valueOf(0xFFFFFFFF));
-        }
-        valueView.setText(percent ? Math.round(Math.max(0, value - min) * 100f / range) + "%"
-                : String.valueOf(value));
+        // The level is ink until the slider takes focus, then white. Whichever it is, the glyph
+        // and the value have to sit on the opposite side of it, so flip them once the fill has
+        // covered most of where they are drawn.
+        final int ink = 0xFF111114, white = 0xFFFFFFFF;
+        final Runnable tint = () -> {
+            float w = bar.getWidth();
+            if (w <= 0) return;
+            float f = bar.getProgress() / (float) range;
+            boolean levelInk = !bar.isFocused();
+            float iconEdge = (icon.getLeft() + icon.getWidth() * 0.5f) / w;
+            float textEdge = (valueView.getLeft() + valueView.getWidth() * 0.6f) / w;
+            icon.setColorFilter(levelInk && f > iconEdge ? white : ink);
+            valueView.setTextColor(levelInk && f > textEdge ? white : ink);
+        };
+        capsule.post(tint);
+        bar.setOnFocusChangeListener((v, hasFocus) -> tint.run());
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
-                int v = min + progress;
-                valueView.setText(percent ? Math.round(progress * 100f / range) + "%"
-                        : String.valueOf(v));
+                valueView.setText(Math.round(progress * 100f / range) + "%");
+                tint.run();
                 if (!fromUser) return;
-                if (percent) {
-                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-                    if (am != null) {
-                        try {
-                            am.setStreamVolume(AudioManager.STREAM_MUSIC, v, 0);
-                        } catch (Exception ignored) {
-                        }
+                AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                if (am != null) {
+                    try {
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, progress, 0);
+                    } catch (Exception ignored) {
                     }
-                } else {
-                    setBrightness(v);
                 }
             }
 
@@ -3369,22 +3942,39 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             public void onStopTrackingTouch(SeekBar sb) {
             }
         });
-        block.addView(bar, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams blockLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        blockLp.setMargins(dp(4), dp(1), dp(4), dp(1));
-        parent.addView(block, blockLp);
+        LinearLayout.LayoutParams capsuleLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
+        capsuleLp.setMargins(dp(4), dp(3), dp(4), dp(3));
+        parent.addView(capsule, capsuleLp);
         return bar;
     }
 
-    private void setBrightness(int value) {
-        try {
-            Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE,
-                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL);
-            Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS,
-                    Math.max(5, Math.min(255, value)));
-        } catch (Exception ignored) {
+    /** Four ascending bars, the familiar Wi-Fi signal reading; drawn because it is 20×14dp. */
+    public static class SignalBars extends View {
+        private static final float[] HEIGHTS = {0.32f, 0.56f, 0.78f, 1f};
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private int level = 2;
+
+        public SignalBars(Context context) {
+            super(context);
+        }
+
+        void setLevel(int value) {
+            level = value;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            float w = getWidth(), h = getHeight();
+            float bar = w * 0.16f;
+            float gap = (w - bar * 4) / 3f;
+            for (int i = 0; i < 4; i++) {
+                float bh = h * HEIGHTS[i];
+                float left = i * (bar + gap);
+                paint.setColor(i < level ? 0xFF111114 : 0x2E000000);
+                canvas.drawRoundRect(new RectF(left, h - bh, left + bar, h), bar / 2, bar / 2, paint);
+            }
         }
     }
 

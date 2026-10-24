@@ -7,8 +7,8 @@
     android:paddingStart="10dp"
     android:paddingRight="10dp"
     android:paddingEnd="10dp"
-    android:paddingTop="6dp"
-    android:paddingBottom="6dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp"
     android:scrollbars="none"
     android:focusable="false"
     android:descendantFocusability="afterDescendants"
@@ -22,23 +22,23 @@
         <TextView
             android:id="@+id/controlTitle"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingLeft="10dp"
-            android:paddingStart="10dp"
-            android:paddingRight="10dp"
-            android:paddingEnd="10dp"
-            android:paddingTop="4dp"
-            android:paddingBottom="8dp"
+            android:layout_height="54dp"
+            android:gravity="center_vertical"
+            android:paddingLeft="12dp"
+            android:paddingStart="12dp"
+            android:paddingRight="12dp"
+            android:paddingEnd="12dp"
             android:text="@string/control_center"
-            android:textColor="#D9FFFFFF"
-            android:textSize="13sp"
-            android:letterSpacing="0.02"
+            android:textColor="#111114"
+            android:textSize="19sp"
+            android:textStyle="bold"
+            android:includeFontPadding="false"
             android:textAllCaps="false"
             android:fontFamily="@font/outfit"
             android:fontVariationSettings="'wght' 600" />
 
         <!-- Round glass tiles: the four places people actually go. The backdrop draws every
-             disc and carries the white selection, which slides between them. -->
+             disc and carries the ink selection, which slides between them. -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content">
@@ -57,21 +57,11 @@
                 android:paddingBottom="4dp" />
         </FrameLayout>
 
-        <FrameLayout
+        <LinearLayout
+            android:id="@+id/rows"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
-
-            <com.gathin.tvhome.GlideBackdrop
-                android:id="@+id/rowsGlide"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent" />
-
-            <LinearLayout
-                android:id="@+id/rows"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical" />
-        </FrameLayout>
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
 
         <LinearLayout
             android:id="@+id/sliders"

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Wi-Fi sheet: a light pane of frosted glass, like the Wi-Fi menu on a desktop OS. The desk
+     behind it is already blurred by floatingOver, so a near-opaque white wash reads as glass. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient android:angle="270" android:startColor="#F7FFFFFF" android:endColor="#F0F1F1F6" />
+            <stroke android:width="1dp" android:color="#33000000" />
+            <corners android:radius="22dp" />
+        </shape>
+    </item>
+    <item android:top="1dp" android:left="1dp" android:right="1dp" android:bottom="1dp">
+        <shape android:shape="rectangle">
+            <gradient android:angle="270" android:startColor="#4DFFFFFF" android:endColor="#00FFFFFF" />
+            <corners android:radius="21dp" />
+        </shape>
+    </item>
+</layer-list>

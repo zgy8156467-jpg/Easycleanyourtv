@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Build;
+import android.provider.Settings;
 import android.util.Log;
 
 import java.util.ArrayList;
@@ -74,6 +75,12 @@ final class DeviceProfile {
      * sends Home straight to {@code com.tianci.movieplatform/…rootpage.HomeActivity}. Its idle
      * carousel is {@code com.coocaa.screensaver} (class {@code com.skyworth.screensaver.ui.*}), and
      * the user settings app is {@code com.skyworth.setting}.
+     *
+     * <p>Skyworth 8R710_A6E (85A6E, Android 13, 2026-10-24): the same package, but this firmware
+     * shows the home page as {@code com.coocaa.homepage.vast.HomePageActivity} inside the host
+     * {@code com.ccos.cooui.movieplatform.MainActivity}, and accessibility reports the host name,
+     * so that host is the suffix. This set also has no Accessibility page at all; see
+     * {@link #accessibilitySettingsPresent}.
      */
     private static final Brand[] BRANDS = {
             new Brand("xiaomi",
@@ -87,7 +94,11 @@ final class DeviceProfile {
             new Brand("skyworth",
                     new String[]{"skyworth", "coocaa", "tianci", "创维", "酷开"},
                     new String[]{"com.tianci.movieplatform"},
-                    new String[]{"rootpage.HomeActivity"},
+                    // 8R720 (Android 13): rootpage.HomeActivity. 8R710_A6E (Android 13): the
+                    // window title says com.coocaa.homepage.vast.HomePageActivity, but that activity
+                    // is loaded inside a host and the accessibility event reports the host class
+                    // com.ccos.cooui.movieplatform.MainActivity — matching the window title never fired.
+                    new String[]{"rootpage.HomeActivity", "movieplatform.MainActivity"},
                     new String[]{"com.coocaa.screensaver"},
                     new String[]{"com.skyworth.setting"},
                     false),
@@ -119,16 +130,22 @@ final class DeviceProfile {
     /** Vendor settings packages that are actually installed, best first. */
     final List<String> settingsPackages;
     final boolean allAppsIsHome;
+    /**
+     * Whether this set has a Settings > Accessibility screen. When it does not, the launcher shows
+     * the adb lines instead of a button that opens a dead stub; see {@code MainActivity}.
+     */
+    final boolean accessibilitySettings;
 
     private DeviceProfile(String name, Set<String> stockHomes, List<String> homeClassSuffixes,
                           Set<String> screenSavers, List<String> settingsPackages,
-                          boolean allAppsIsHome) {
+                          boolean allAppsIsHome, boolean accessibilitySettings) {
         this.name = name;
         this.stockHomes = Collections.unmodifiableSet(stockHomes);
         this.homeClassSuffixes = Collections.unmodifiableList(homeClassSuffixes);
         this.screenSavers = Collections.unmodifiableSet(screenSavers);
         this.settingsPackages = Collections.unmodifiableList(settingsPackages);
         this.allAppsIsHome = allAppsIsHome;
+        this.accessibilitySettings = accessibilitySettings;
     }
 
     private static DeviceProfile cached;
@@ -166,7 +183,8 @@ final class DeviceProfile {
                 + " stockHome=" + stockHomes
                 + " screensaver=" + screenSavers
                 + " settings=" + settingsPackages
-                + " allAppsHome=" + allAppsIsHome;
+                + " allAppsHome=" + allAppsIsHome
+                + " a11ySettings=" + accessibilitySettings;
     }
 
     private static DeviceProfile resolve(Context ctx) {
@@ -188,7 +206,7 @@ final class DeviceProfile {
         DeviceProfile profile = new DeviceProfile(brand.name, homes,
                 Arrays.asList(brand.homeClassSuffixes), screens,
                 settings.isEmpty() ? Collections.emptyList() : settings,
-                brand.allAppsIsHome);
+                brand.allAppsIsHome, accessibilitySettingsPresent(pm));
         Log.i(TAG, profile.describe());
         return profile;
     }
@@ -229,5 +247,19 @@ final class DeviceProfile {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Whether Settings > Accessibility actually opens something. AOSP TV firmware without the
+     * Settings app answers the standard intent with {@code com.android.tv.frameworkpackagestubs},
+     * whose stub screens are dead ends; Skyworth 8R710 (85A6E, Android 13, 2026-10-24) has no
+     * other handler, and no accessibility page anywhere in com.skyworth.setting either. No
+     * handler at all counts as missing too.
+     */
+    private static boolean accessibilitySettingsPresent(PackageManager pm) {
+        ResolveInfo ri = pm.resolveActivity(
+                new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), 0);
+        if (ri == null || ri.activityInfo == null) return false;
+        return !"com.android.tv.frameworkpackagestubs".equals(ri.activityInfo.packageName);
     }
 }

@@ -133,6 +133,27 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             "com.xiaomi.smarthome",
     };
 
+    /** Package or label fragments that name a file manager worth a tile. */
+    private static final String[] FILE_TOOLS = {
+            "filemanager", "file_manager", "fileexplorer", "file_explorer", "filebrowser",
+            "documentsui", "filemaster", "文件", "资源管理", "file manager", "file explorer",
+    };
+
+    /** The same for the vendor's own app store, which people look for by name. */
+    private static final String[] STORE_TOOLS = {
+            "appstore", "app_store", "appmarket", "app_market", "appcenter", "应用商店",
+            "应用市场", "应用商城", "应用中心", "商店", "市场", "商城", "app store", "market",
+    };
+
+    private static boolean matchesTool(String pkg, String label, String[] words) {
+        String p = pkg.toLowerCase(java.util.Locale.ROOT);
+        String l = label.toLowerCase(java.util.Locale.ROOT);
+        for (String w : words) {
+            if (p.contains(w) || l.contains(w)) return true;
+        }
+        return false;
+    }
+
     private final Context ctx;
     private final TileListener listener;
     private final int dockSize;
@@ -217,6 +238,24 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         for (Entry e : fresh) listed.add(e.pkg);
         for (String pkg : HIDDEN_LAUNCHERS) {
             if (listed.contains(pkg) || hidden.contains(pkg)) continue;
+            Entry e = hiddenLauncher(pm, pkg);
+            if (e != null) {
+                fresh.add(e);
+                listed.add(pkg);
+            }
+        }
+        // Vendor file managers and app stores often ship without a LAUNCHER entry — PatchWall
+        // opens them by component — so the desk never showed them. Match package or label rather
+        // than a package table that only ever covers the TVs we happened to buy.
+        for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+            String pkg = ai.packageName;
+            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg) || listed.contains(pkg)) {
+                continue;
+            }
+            String label = String.valueOf(ai.loadLabel(pm));
+            if (!matchesTool(pkg, label, FILE_TOOLS) && !matchesTool(pkg, label, STORE_TOOLS)) {
+                continue;
+            }
             Entry e = hiddenLauncher(pm, pkg);
             if (e != null) {
                 fresh.add(e);

@@ -19,6 +19,7 @@
     android:clickable="true">
 
     <FrameLayout
+        android:id="@+id/iconDisc"
         android:layout_width="38dp"
         android:layout_height="38dp"
         android:background="@drawable/control_row_icon_bg"

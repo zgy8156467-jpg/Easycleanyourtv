@@ -74,11 +74,9 @@
     <string name="control_center">Control Centre</string>
     <string name="network">Network</string>
     <string name="bluetooth">Bluetooth</string>
-    <string name="brightness">Brightness</string>
     <string name="volume">Volume</string>
     <string name="on">On</string>
     <string name="off">Off</string>
-    <string name="brightness_permission">Allow brightness control</string>
     <string name="crash_title">The launcher hit an error</string>
     <string name="crash_hint">Photograph this screen and send it to the group. Press OK to try the desk again.</string>
     <string name="crash_continue">Start the desk</string>
@@ -116,6 +114,9 @@
     <string name="a11y_lost_go">Turn it on</string>
     <string name="a11y_first_title">Make Home come back here</string>
     <string name="a11y_first_notes">Turn on “Home key to top” in Accessibility, and allow Usage access for this app, so the remote’s Home button returns to this desk.</string>
+    <string name="a11y_guide_title">Turn Home takeover on over ADB</string>
+    <string name="a11y_guide_notes">This TV has no Accessibility page — the vendor removed it. The switch can only be set from a computer, once.\nTake a photo of this screen, then follow the steps below.\n\n1. On the TV: Settings → General → About this TV → TV information → More information. Stay on that page and press Up Up Down Down Left Right Left Right to open the factory menu, then General → ADB switch → On and reboot.\n2. On a computer on the same network:\nadb connect YOUR_TV_IP:5555\nadb shell settings put secure enabled_accessibility_services com.gathin.tvhome/.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set com.gathin.tvhome GET_USAGE_STATS allow\n\nEvery app update turns it off again; re-run the two settings commands after updating.</string>
+    <string name="a11y_guide_ok">Got it</string>
     <string name="no_apps">No TV apps found</string>
     <string name="weather_clear">Clear</string>
     <string name="weather_cloudy">Cloudy</string>
@@ -134,7 +135,7 @@
     <string name="weather_city_manual">Picked · %1$s</string>
     <string name="weather_city_title">Choose a city</string>
     <string name="weather_city_auto_row">Auto (by IP)</string>
-    <string name="weather_city_back">‹ Provinces</string>
+    <string name="weather_city_back">‹ Back</string>
     <string name="weather_city_set">Weather city set to %1$s</string>
     <string name="forecast_days">Forecast days</string>
     <string name="forecast_1">Today</string>
@@ -162,5 +163,16 @@
     <string name="no_paired_devices">No paired devices yet</string>
     <string name="devices_connected">%1$d connected</string>
     <string name="network_off">Not connected</string>
+    <string name="wifi_hotspots">Personal hotspots</string>
+    <string name="wifi_known">Saved networks</string>
+    <string name="wifi_other">Other networks</string>
+    <string name="wifi_saved">Saved</string>
+    <string name="wifi_connecting">Connecting to %1$s</string>
+    <string name="wifi_scan">Search nearby networks</string>
+    <string name="wifi_scanning">Searching…</string>
+    <string name="wifi_no_new">No new networks found</string>
+    <string name="wifi_settings">Wi-Fi settings…</string>
+    <string name="wifi_off">Wi-Fi is off</string>
+    <string name="wifi_no_networks">No networks found</string>
     <string name="mi_home">Mi Home</string>
 </resources>

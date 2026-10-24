@@ -59,6 +59,14 @@ public final class GlideBackdrop extends View {
         invalidate();
     }
 
+    /** Invert for the light sheet: faint ink slots, near-black selection, white glyphs on it. */
+    void setLight() {
+        fill.setColor(0x14000000);
+        rim.setColor(0x1F000000);
+        white.setColor(0xFF111114);
+        invalidate();
+    }
+
     /** Rects in this view's coordinates, in the same order as the focus() indices. */
     void setSlots(List<RectF> rects) {
         boolean same = rects.size() == slots.size();

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/panel"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingLeft="10dp"
+    android:paddingStart="10dp"
+    android:paddingRight="10dp"
+    android:paddingEnd="10dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="8dp"
+    android:scrollbars="none"
+    android:focusable="false"
+    android:descendantFocusability="afterDescendants"
+    android:elevation="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/detailTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingLeft="12dp"
+            android:paddingStart="12dp"
+            android:paddingRight="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="8dp"
+            android:textColor="#D9FFFFFF"
+            android:textSize="13sp"
+            android:letterSpacing="0.02"
+            android:textAllCaps="false"
+            android:fontFamily="@font/outfit"
+            android:fontVariationSettings="'wght' 600" />
+
+        <LinearLayout
+            android:id="@+id/detailRows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </LinearLayout>
+</ScrollView>

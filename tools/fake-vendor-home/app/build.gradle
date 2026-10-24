@@ -1,0 +1,23 @@
+// Test-only: a stand-in for a TV maker's stock launcher so the Home-key takeover can be
+// exercised on the emulator, which ships no PatchWall. Never shipped to users.
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.fake.vendorhome'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.fake.vendorhome"
+        minSdk 21
+        targetSdk 29
+        versionCode 1
+        versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

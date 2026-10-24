@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="NewApi">
+    <!-- fontFamily/letterSpacing/fontVariationSettings below are simply ignored by old versions;
+         they degrade to the system font instead of crashing. -->
+    <!-- Holo is the newest framework theme Android 4.0 has. values-v21 swaps in Material. -->
+    <style name="Theme.TvHome" parent="android:Theme.Holo.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
+    <!-- The crash screen must never depend on the custom theme resolving. -->
+    <style name="Theme.Crash" parent="android:Theme.Holo.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
+    </style>
+
+    <!-- android:tint on ImageView only understands a plain colour before 21; a ColorStateList
+         there throws NumberFormatException inside the ImageView constructor. styles-v21 adds the
+         tint, old versions get the empty style and leave the icon white. -->
+    <style name="IconTint" />
+    <style name="IconTintDanger" />
+
+    <!-- One segment of the top-bar glass capsule, tvOS style. The capsule itself is the frosted
+         background; this only draws the white highlight on the focused segment. -->
+    <style name="TopButton">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">42dp</item>
+        <item name="android:layout_marginStart">2dp</item>
+        <item name="android:layout_marginLeft">2dp</item>
+        <item name="android:paddingStart">15dp</item>
+        <item name="android:paddingLeft">15dp</item>
+        <item name="android:paddingEnd">15dp</item>
+        <item name="android:paddingRight">15dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:background">@drawable/top_button_bg</item>
+        <item name="android:textColor">@drawable/pill_text</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:fontFamily">@font/outfit</item>
+        <item name="android:fontVariationSettings">\'wght\' 500</item>
+        <item name="android:letterSpacing">0.01</item>
+        <item name="android:drawablePadding">9dp</item>
+        <item name="android:shadowColor">#80000000</item>
+        <item name="android:shadowDx">0</item>
+        <item name="android:shadowDy">1</item>
+        <item name="android:shadowRadius">4</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+    </style>
+</resources>

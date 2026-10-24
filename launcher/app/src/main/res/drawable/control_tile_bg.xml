@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A round glass button, as in the tvOS control center. Focused it fills near-white and the
+     icon goes dark (TileIconTint); otherwise it is dark glass with a rim, readable on top of
+     the blurred desk it now floats on. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="oval">
+            <solid android:color="#F2FFFFFF" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#4D000000" />
+            <stroke android:width="1dp" android:color="#40FFFFFF" />
+        </shape>
+    </item>
+</selector>

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Spanish. The core launcher strings are upstream's (Gathin23/tv-vibehack, MIT); the desktop,
+      favourites and wallpaper strings are this fork's additions.
+    -->
+    <string name="app_name">Inicio</string>
+    <string name="inputs">Entradas</string>
+    <string name="wifi">Wi-Fi</string>
+    <string name="settings">Ajustes</string>
+    <string name="choose_input">Entradas</string>
+    <string name="connected">Conectado</string>
+    <string name="standby">En espera</string>
+    <string name="not_connected">Sin dispositivo</string>
+    <string name="live_tv">TV en vivo</string>
+    <string name="no_inputs">No se encontraron entradas</string>
+    <string name="good_morning">Buenos días</string>
+    <string name="good_afternoon">Buenas tardes</string>
+    <string name="good_evening">Buenas noches</string>
+    <string name="good_night">Buenas noches</string>
+    <string name="ethernet">Ethernet</string>
+    <string name="offline">Sin conexión</string>
+    <string name="not_available">No disponible en este TV</string>
+    <string name="cant_open">No se puede abrir %1$s</string>
+    <string name="date_format">"EEEE d 'de' MMMM"</string>
+    <string name="dream_name">Reloj</string>
+    <string name="desktop">Inicio</string>
+    <string name="desktop_settings">Ajustes de inicio</string>
+    <string name="columns_title">Iconos por fila</string>
+    <string name="columns_auto">Ahora %1$d · elegido para esta pantalla</string>
+    <string name="columns_manual">Ahora %1$d · tu elección</string>
+    <string name="columns_set">%1$d iconos por fila</string>
+    <string name="columns_auto_toast">Automático · %1$d iconos por fila</string>
+    <string name="favourites">Favoritos</string>
+    <string name="dock_picker_title">Favoritos · elige hasta %1$d para el dock</string>
+    <string name="dock_added">%1$s fijado en el dock</string>
+    <string name="dock_removed">%1$s quitado del dock</string>
+    <string name="dock_full">El dock admite %1$d apps. Quita una primero.</string>
+    <string name="close">Cerrar</string>
+    <string name="bing_daily">Imagen diaria de Bing</string>
+    <string name="bing_daily_hint">Una imagen nueva al día</string>
+    <string name="bing_fetching">Descargando la imagen de hoy…</string>
+    <string name="bing_updated">Fondo actualizado</string>
+    <string name="bing_failed">No se pudo descargar la imagen</string>
+    <string name="bing_stopped">Cambio diario desactivado, el fondo actual se mantiene</string>
+    <string name="pick_wallpaper">Elige una imagen en este TV</string>
+    <string name="wallpaper_off">Quitar el fondo</string>
+    <string name="wallpaper_removed">Fondo eliminado</string>
+    <string name="wallpaper_none_toast">No había ningún fondo</string>
+    <string name="wallpaper_on">Activado · %1$d KB (se reemplaza a diario)</string>
+    <string name="wallpaper_none">Ninguno · el inicio es negro</string>
+    <string name="wallpaper_set">Fondo aplicado</string>
+    <string name="wallpaper_bad">Ese archivo no se pudo usar</string>
+    <string name="home_key_description">El botón Inicio del mando abre este escritorio y vuelve arriba; el botón de Ajustes (opciones) abre los ajustes rápidos.</string>
+    <string name="tv_settings">Ajustes del televisor</string>
+    <string name="quick_picture">Pantalla e imagen</string>
+    <string name="quick_network">Red</string>
+    <string name="quick_apps">Gestionar aplicaciones</string>
+    <string name="quick_apps_hint">Desinstalar o desactivar</string>
+    <string name="launcher_settings">Ajustes del escritorio</string>
+    <string name="quick_dock">Favoritos</string>
+    <string name="menu_key_everywhere">Botón de menú también en otras apps</string>
+    <string name="menu_key_scope_on">Abre este panel desde otras aplicaciones</string>
+    <string name="menu_key_scope_off">Solo en el escritorio</string>
+    <string name="menu_key_on">El botón de menú abre los ajustes rápidos en todas las aplicaciones</string>
+    <string name="menu_key_off">El botón de menú solo abre los ajustes rápidos en el escritorio</string>
+    <string name="input_source_settings">Configuración de entrada</string>
+    <string name="reduced_motion">Movimiento reducido</string>
+    <string name="reduced_motion_off">Animaciones completas</string>
+    <string name="reduced_motion_on">Animaciones desactivadas</string>
+    <string name="reduced_motion_turned_off">Animaciones desactivadas: el escritorio es más sobrio, con menos vida</string>
+    <string name="reduced_motion_turned_on">Animaciones activadas de nuevo</string>
+</resources>

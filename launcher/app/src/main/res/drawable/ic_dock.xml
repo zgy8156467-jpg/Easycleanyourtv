@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Four rounded squares, Apple's square.grid.2x2 silhouette rather than the thin Material grid. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp" android:height="22dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5.9,4 L10.5,4 A1.9,1.9 0 0 1 12.4,5.9 L12.4,10.5 A1.9,1.9 0 0 1 10.5,12.4 L5.9,12.4 A1.9,1.9 0 0 1 4,10.5 L4,5.9 A1.9,1.9 0 0 1 5.9,4 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.5,4 L20.1,4 A1.9,1.9 0 0 1 22,5.9 L22,10.5 A1.9,1.9 0 0 1 20.1,12.4 L15.5,12.4 A1.9,1.9 0 0 1 13.6,10.5 L13.6,5.9 A1.9,1.9 0 0 1 15.5,4 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5.9,13.6 L10.5,13.6 A1.9,1.9 0 0 1 12.4,15.5 L12.4,20.1 A1.9,1.9 0 0 1 10.5,22 L5.9,22 A1.9,1.9 0 0 1 4,20.1 L4,15.5 A1.9,1.9 0 0 1 5.9,13.6 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.5,13.6 L20.1,13.6 A1.9,1.9 0 0 1 22,15.5 L22,20.1 A1.9,1.9 0 0 1 20.1,22 L15.5,22 A1.9,1.9 0 0 1 13.6,20.1 L13.6,15.5 A1.9,1.9 0 0 1 15.5,13.6 Z" />
+</vector>

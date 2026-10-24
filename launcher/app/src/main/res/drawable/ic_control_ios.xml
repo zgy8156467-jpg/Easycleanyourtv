@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- iOS-style pair of toggle switches, drawn bare: no enclosing tile. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="30dp"
+    android:height="30dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000"
+        android:pathData="M6.5,4.5h10a3.5,3.5 0 0 1 0,7h-10a3.5,3.5 0 0 1 0,-7z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M16.5,6.1a1.9,1.9 0 1 1 0,3.8a1.9,1.9 0 1 1 0,-3.8z" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000"
+        android:pathData="M6.5,12.5h10a3.5,3.5 0 0 1 0,7h-10a3.5,3.5 0 0 1 0,-7z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.5,14.1a1.9,1.9 0 1 1 0,3.8a1.9,1.9 0 1 1 0,-3.8z" />
+</vector>

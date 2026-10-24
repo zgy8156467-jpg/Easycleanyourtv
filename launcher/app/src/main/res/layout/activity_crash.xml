@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="48dp"
+    android:background="#FF0E0D0C">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/crash_title"
+        android:textColor="#FFFFFFFF"
+        android:textSize="28sp"
+        android:fontFamily="@font/outfit" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="@string/crash_hint"
+        android:textColor="#B3FFFFFF"
+        android:textSize="15sp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="20dp"
+        android:background="#1AFFFFFF"
+        android:padding="16dp"
+        android:focusable="false">
+
+        <TextView
+            android:id="@+id/crashText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#E6FFFFFF"
+            android:textSize="14sp"
+            android:fontFamily="monospace" />
+    </ScrollView>
+
+    <TextView
+        android:id="@+id/crashSend"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:textColor="#99FFFFFF"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/crashContinue"
+        android:layout_width="wrap_content"
+        android:layout_height="52dp"
+        android:layout_marginTop="20dp"
+        android:paddingLeft="28dp"
+        android:paddingStart="28dp"
+        android:paddingRight="28dp"
+        android:paddingEnd="28dp"
+        android:gravity="center"
+        android:background="@drawable/input_row_bg"
+        android:focusable="true"
+        android:clickable="true"
+        android:text="@string/crash_continue"
+        android:textColor="@drawable/pill_text"
+        android:textSize="16sp" />
+</LinearLayout>

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/glass_panel"
+    android:padding="24dp"
+    android:elevation="16dp">
+
+    <TextView
+        android:id="@+id/updateTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFFFF"
+        android:textSize="24sp"
+        android:fontFamily="@font/outfit" />
+
+    <TextView
+        android:id="@+id/updateNotes"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:lineSpacingExtra="4dp"
+        android:maxLines="8"
+        android:ellipsize="end"
+        android:textColor="#CCFFFFFF"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/updateStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:textColor="#99FFFFFF"
+        android:textSize="13sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/updateGo"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:background="@drawable/input_row_bg"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingLeft="26dp"
+            android:paddingStart="26dp"
+            android:paddingRight="26dp"
+            android:paddingEnd="26dp"
+            android:text="@string/update_now"
+            android:textColor="@drawable/pill_text"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/updateLater"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:layout_marginLeft="12dp"
+            android:layout_marginStart="12dp"
+            android:background="@drawable/input_row_bg"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:paddingLeft="26dp"
+            android:paddingStart="26dp"
+            android:paddingRight="26dp"
+            android:paddingEnd="26dp"
+            android:text="@string/update_later"
+            android:textColor="@drawable/pill_text"
+            android:textSize="16sp" />
+    </LinearLayout>
+</LinearLayout>

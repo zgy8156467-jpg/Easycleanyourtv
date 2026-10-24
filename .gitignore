@@ -1,0 +1,23 @@
+# Gradle / Android build output
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Build artifacts and local signing material
+*.apk
+/*.zip
+/dist/
+*.jks
+*.keystore
+keystore.properties
+
+# Local agent tooling and private feedback backend infrastructure
+.impeccable/
+tools/feedback-server/
+tools/deploy-feedback.sh
+PRODUCT.md

@@ -1,0 +1,121 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing material stays out of the repository. Copy keystore.properties.example to
+// keystore.properties (it is gitignored) and point it at your own key. Without it, release
+// builds are unsigned and only suitable for local testing.
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+// The feedback endpoint is our own infrastructure. Official builds get the report token from the
+// gitignored keystore.properties; public/contributor builds leave it empty and simply skip reporting.
+def feedbackToken = keystoreProps['feedbackToken'] ?: ''
+
+android {
+    namespace 'com.gathin.tvhome'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.gathin.tvhome'
+        minSdk 23
+        targetSdk 29
+        versionCode 43
+        versionName '2.0.4'
+        buildConfigField 'String', 'FEEDBACK_TOKEN', "\"${feedbackToken}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    // Two installers, one source tree. modern is what 1.4-1.6 users already run; legacy is the
+    // Android 4.0+ build for the old TVs that were never in the upstream device table. Same
+    // applicationId and signature, so a device can only ever have one of them installed.
+    flavorDimensions 'tier'
+    productFlavors {
+        modern {
+            dimension 'tier'
+            minSdk 23
+            buildConfigField 'String', 'CHANNEL', '"modern"'
+            buildConfigField 'String', 'UPDATE_PATH', '"update.json"'
+        }
+        legacy {
+            dimension 'tier'
+            minSdk 14
+            versionNameSuffix '-legacy'
+            buildConfigField 'String', 'CHANNEL', '"legacy"'
+            buildConfigField 'String', 'UPDATE_PATH', '"update-legacy.json"'
+            // Platform vector drawables only exist from 21; AGP rasterises them for older APIs.
+            vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi']
+        }
+        // Same package as stable, so installing it replaces the desk like an OS beta. Only the
+        // update manifest differs: a beta install keeps checking update-beta.json until the user
+        // switches back. Going back to stable needs a stable build with equal or higher versionCode;
+        // Android refuses downgrades.
+        beta {
+            dimension 'tier'
+            minSdk 23
+            versionNameSuffix '-beta'
+            buildConfigField 'String', 'CHANNEL', '"beta"'
+            buildConfigField 'String', 'UPDATE_PATH', '"update-beta.json"'
+            resValue 'string', 'app_name', 'Home Beta'
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Same switch upstream uses: R8 strips and optimises the code (AndroidX included),
+            // resource shrinking drops what the launcher never references.
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Sign with the project key when keystore.properties is present. Contributors without
+            // it get an unsigned APK; never distribute that over an existing install.
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    lint {
+        // The launcher is sideloaded over ADB, never published to Google Play, so Play's minimum targetSdk
+        // does not apply; without this, lintVitalRelease fails assembleRelease.
+        disable 'ExpiredTargetSdkVersion'
+        // False positive: setHasFixedSize(true) is called on the desk grid only, whose size is the screen.
+        // The Favourites panel's list really does need wrap_content — it is measured so the popup can be
+        // as tall as its content — and lint cannot tell the two RecyclerViews apart.
+        disable 'InvalidSetHasFixedSize'
+    }
+
+    packagingOptions {
+        resources {
+            // Kotlin metadata dragged in by AndroidX. This launcher is plain Java and never reads it;
+            // leaving it out takes about 14 KB off every install. (Upstream does the same.)
+            excludes += ['kotlin/**', 'META-INF/*.version', 'META-INF/*.kotlin_module', 'DebugProbesKt.bin']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'androidx.dynamicanimation:dynamicanimation:1.0.0'
+}

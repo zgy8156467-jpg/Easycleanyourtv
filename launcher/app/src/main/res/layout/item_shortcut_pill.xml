@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A compact shortcut pill for the bottom of the control centre: three of these in a row keep
+     cast / update / feedback out of the tall scrolling list. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="0dp"
+    android:layout_height="38dp"
+    android:layout_weight="1"
+    android:layout_marginLeft="3dp"
+    android:layout_marginStart="3dp"
+    android:layout_marginRight="3dp"
+    android:layout_marginEnd="3dp"
+    android:layout_marginTop="6dp"
+    android:orientation="horizontal"
+    android:gravity="center"
+    android:paddingLeft="10dp"
+    android:paddingStart="10dp"
+    android:paddingRight="10dp"
+    android:paddingEnd="10dp"
+    android:background="@drawable/control_row_bg"
+    android:focusable="true"
+    android:clickable="true">
+
+    <ImageView
+        android:id="@+id/icon"
+        android:layout_width="17dp"
+        android:layout_height="17dp"
+        android:contentDescription="@null" />
+
+    <TextView
+        android:id="@+id/label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="7dp"
+        android:layout_marginStart="7dp"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:textColor="@drawable/pill_text"
+        android:textSize="12sp"
+        android:fontFamily="@font/outfit"
+        android:fontVariationSettings="'wght' 600"
+        android:duplicateParentState="true" />
+</LinearLayout>

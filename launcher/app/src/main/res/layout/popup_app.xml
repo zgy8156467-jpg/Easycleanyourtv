@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press menu for one app tile: pin/unpin and uninstall. Centred, like the update prompt. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/glass_panel"
+    android:padding="6dp"
+    android:elevation="16dp">
+
+    <TextView
+        android:id="@+id/appTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingLeft="12dp"
+        android:paddingStart="12dp"
+        android:paddingRight="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="8dp"
+        android:textColor="#99FFFFFF"
+        android:textSize="13sp"
+        android:fontFamily="@font/outfit"
+        android:fontVariationSettings="'wght' 500"
+        android:letterSpacing="0.04"
+        android:singleLine="true"
+        android:ellipsize="end" />
+
+    <LinearLayout
+        android:id="@+id/rowPin"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/input_row_bg"
+        android:paddingLeft="12dp"
+        android:paddingStart="12dp"
+        android:paddingRight="12dp"
+        android:paddingEnd="12dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true">
+
+        <ImageView
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginRight="10dp"
+            android:layout_marginEnd="10dp"
+            android:src="@drawable/ic_dock"
+            style="@style/IconTint"
+            android:duplicateParentState="true"
+            android:contentDescription="@null" />
+
+        <TextView
+            android:id="@+id/pinTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@drawable/pill_text"
+            android:duplicateParentState="true"
+            android:textSize="15sp"
+            android:fontFamily="@font/outfit"
+            android:fontVariationSettings="'wght' 500" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/rowUninstall"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/input_row_bg"
+        android:paddingLeft="12dp"
+        android:paddingStart="12dp"
+        android:paddingRight="12dp"
+        android:paddingEnd="12dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true">
+
+        <ImageView
+            android:id="@+id/uninstallIcon"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginRight="10dp"
+            android:layout_marginEnd="10dp"
+            android:src="@drawable/ic_trash"
+            style="@style/IconTintDanger"
+            android:duplicateParentState="true"
+            android:contentDescription="@null" />
+
+        <TextView
+            android:id="@+id/uninstallTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/app_menu_uninstall"
+            android:textColor="@drawable/pill_text_danger"
+            android:duplicateParentState="true"
+            android:textSize="15sp"
+            android:fontFamily="@font/outfit"
+            android:fontVariationSettings="'wght' 500" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DreamService is API 17; keep the screensaver off on older devices. -->
+    <bool name="clock_dream_enabled">false</bool>
+</resources>

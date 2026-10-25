@@ -88,23 +88,23 @@ Measured on a 2 GB Chinese TV box it sits at about **107 MB resident (PSS)**.
 
 Captured from the 2.1.4 build at 1920×1080:
 
-![The desk](docs/截图-2.1.4/01-桌面.jpg)
+![The desk](docs/screens-2.1.4/01-home.jpg)
 
 Control centre — dock icon count, running apps and services, one-tap clean:
 
-![Control centre](docs/截图-2.1.4/02-控制中心.jpg)
+![Control centre](docs/screens-2.1.4/02-control-centre.jpg)
 
 Dock size, 1 to 8:
 
-![Dock icons](docs/截图-2.1.4/03-Dock数量.jpg)
+![Dock icons](docs/screens-2.1.4/03-dock-size.jpg)
 
 Running apps and services:
 
-![Running apps and services](docs/截图-2.1.4/04-运行中应用与服务.jpg)
+![Running apps and services](docs/screens-2.1.4/04-running.jpg)
 
 A folder:
 
-![Folder](docs/截图-2.1.4/05-文件夹.jpg)
+![Folder](docs/screens-2.1.4/05-folder.jpg)
 
 ## How this differs from upstream
 

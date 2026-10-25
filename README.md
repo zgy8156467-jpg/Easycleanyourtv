@@ -75,23 +75,23 @@
 
 本项目 2.1.4 构建，1920×1080 安卓 TV 截屏：
 
-![桌面](docs/截图-2.1.4/01-桌面.jpg)
+![桌面](docs/screens-2.1.4/01-home.jpg)
 
 控制中心：Dock 图标数量、运行中应用与服务、一键清理都在这里。
 
-![控制中心](docs/截图-2.1.4/02-控制中心.jpg)
+![控制中心](docs/screens-2.1.4/02-control-centre.jpg)
 
 Dock 图标数量可选 1–8 个：
 
-![Dock 图标数量](docs/截图-2.1.4/03-Dock数量.jpg)
+![Dock 图标数量](docs/screens-2.1.4/03-dock-size.jpg)
 
 运行中应用与服务（最近运行 + 桌面服务）：
 
-![运行中应用与服务](docs/截图-2.1.4/04-运行中应用与服务.jpg)
+![运行中应用与服务](docs/screens-2.1.4/04-running.jpg)
 
 文件夹：
 
-![文件夹](docs/截图-2.1.4/05-文件夹.jpg)
+![文件夹](docs/screens-2.1.4/05-folder.jpg)
 
 ## 和上游的差异
 

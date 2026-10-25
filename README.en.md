@@ -70,12 +70,27 @@ libraries (`recyclerview` and `dynamicanimation`), **with no Compose or Glance, 
 recommendation engine**.
 Measured on a 2 GB Chinese TV box it sits at about **107 MB resident (PSS)**.
 
-<details>
-<summary>Before: the stock ad-filled home (left) vs this launcher (right)</summary>
+### What's new in 2.0.15
 
-![Before: stock Google TV home with a sponsored ad. After: the tv-vibehack launcher](docs/stock-vs-new-side.jpg)
+- **Phones no longer get the desk**: they see a "This is a TV launcher" screen with an uninstall button.
+  TVs, projectors and TV boxes are unaffected.
+- **Pick wallpapers in a photo grid** built into the launcher, driven by the remote.
+- **Steadier trailers**: no more silent playback after the TV reclaims memory in the background (XGIMI),
+  and no more first-frame error on the Xiaomi MiTV4.
+- **Trailers from Bilibili's film and TV chart**, matched per app; 16:9 only.
+- **App names stay visible** under tiles and brighten on focus.
 
-</details>
+### Screenshots
+
+Captured from the 2.0.15 build at 1920×1080:
+
+![The desk](docs/screenshot-zh.png)
+
+Control centre (Menu key) and desktop settings:
+
+![Control centre](docs/screenshot-control.png)
+
+![Desktop settings](docs/screenshot-settings.png)
 
 ## How this differs from upstream
 

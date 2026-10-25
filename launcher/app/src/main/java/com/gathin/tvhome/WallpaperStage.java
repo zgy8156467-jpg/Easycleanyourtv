@@ -191,7 +191,7 @@ public class WallpaperStage extends FrameLayout {
             recycleDefault();
             return;
         }
-        decode(file, false, bmp -> {
+        decode(file, bmp -> {
             if (bmp == null) return;
             if (gen != defaultGen) {
                 bmp.recycle();
@@ -541,10 +541,7 @@ public class WallpaperStage extends FrameLayout {
     }
 
     private void showPoster(File file, int index, int gen) {
-        // Mango's 16:9 stills carry a sponsor strip across the very top, right where the clock pills
-        // sit. Trim it; none of the other sources need it.
-        boolean cropTop = "mango".equals(HotPosters.sourceFor(posterPkg));
-        decode(file, cropTop, bmp -> {
+        decode(file, bmp -> {
             if (bmp == null) return;
             if (gen != posterGen) {
                 bmp.recycle();
@@ -617,7 +614,10 @@ public class WallpaperStage extends FrameLayout {
         recyclePoster();
     }
 
-    /** Free every bitmap. Called when Home is in the background and the box is short on memory. */
+    /**
+     * Free every bitmap and keep the stage usable. Called when Home is in the background and the
+     * box is short on memory; the same stage is reused when Home comes back.
+     */
     public void release() {
         defaultGen++;
         posterGen++;
@@ -631,6 +631,12 @@ public class WallpaperStage extends FrameLayout {
         detachPoster();
         base.setImageDrawable(null);
         recycleDefault();
+    }
+
+    /** Shut the stage down for good, when the activity is destroyed. */
+    public void dispose() {
+        release();
+        trailer.dispose();
     }
 
     private void notifyShown() {
@@ -659,7 +665,7 @@ public class WallpaperStage extends FrameLayout {
         void onBitmap(Bitmap bmp);
     }
 
-    private void decode(File file, boolean cropTop, BitmapCallback cb) {
+    private void decode(File file, BitmapCallback cb) {
         new Thread(() -> {
             Bitmap bmp = null;
             try {
@@ -683,13 +689,6 @@ public class WallpaperStage extends FrameLayout {
                         o.inPreferredConfig = Bitmap.Config.RGB_565;
                         bmp = BitmapFactory.decodeFile(file.getPath(), o);
                     }
-                }
-                if (bmp != null && cropTop && bmp.getHeight() > 200) {
-                    // The sponsor strip runs from about 12% to 26% down the 750x420 still.
-                    int cut = Math.round(bmp.getHeight() * 0.27f);
-                    Bitmap trimmed = Bitmap.createBitmap(bmp, 0, cut, bmp.getWidth(), bmp.getHeight() - cut);
-                    if (trimmed != bmp) bmp.recycle();
-                    bmp = trimmed;
                 }
             } catch (Exception | OutOfMemoryError ignored) {
                 bmp = null;

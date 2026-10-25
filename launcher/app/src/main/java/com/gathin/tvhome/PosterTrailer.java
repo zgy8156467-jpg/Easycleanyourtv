@@ -15,6 +15,7 @@ import android.view.ViewParent;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Collections;
@@ -84,6 +85,8 @@ final class PosterTrailer {
     private final Set<String> failedClips = Collections.synchronizedSet(new HashSet<String>());
     private volatile String playingKey;
     private volatile File playingFile;
+    /** Set once the activity is going away; no handler posts are made after this. */
+    private volatile boolean disposed;
     /** The poster whose clip has been (or is being) fetched ahead of the three-second mark. */
     private String prefetched;
 
@@ -157,6 +160,7 @@ final class PosterTrailer {
 
     /** Start (or restart) the clip for this poster. Safe to call on the main thread only. */
     void play(String source, HotPosters.Poster poster) {
+        if (disposed) return;
         stop();
         playingKey = null;   // the previous clip is done; a timeout below must not blame it
         playingFile = null;
@@ -288,7 +292,10 @@ final class PosterTrailer {
         // The slice size is part of the name so a cached clip from an older, smaller cap is not
         // reused as if it were complete.
         File out = new File(dir, clip.bvid + "-" + clip.cid + "-" + (MAX_BYTES >> 20) + "m.mp4");
-        if (out.isFile() && out.length() > 0) return out;
+        if (out.isFile() && out.length() > 0) {
+            repairTruncatedMp4(out);   // slices cached before the repair shipped
+            return out;
+        }
         for (String url : clip.urls) {
             File part = new File(dir, out.getName() + ".part");
             try {
@@ -317,10 +324,13 @@ final class PosterTrailer {
                     }
                 }
                 c.disconnect();
-                if (total > 0 && part.renameTo(out)) {
-                    trim(dir);
-                    Log.i(TAG, "fetched " + out.getName() + " " + total / 1024 + " KB");
-                    return out;
+                if (total > 0) {
+                    repairTruncatedMp4(part);
+                    if (part.renameTo(out)) {
+                        trim(dir);
+                        Log.i(TAG, "fetched " + out.getName() + " " + total / 1024 + " KB");
+                        return out;
+                    }
                 }
             } catch (Exception e) {
                 Log.w(TAG, "fetch " + e.getMessage());
@@ -329,6 +339,45 @@ final class PosterTrailer {
             part.delete();
         }
         return null;
+    }
+
+    /**
+     * A head slice ends in the middle of the mdat box, whose header still claims the full episode.
+     * Some TV media stacks reject that as malformed (the MiTV4 reports -10005 right after the first
+     * frame); shorten the header so the file ends where its last box says it does.
+     */
+    private static void repairTruncatedMp4(File file) {
+        try (RandomAccessFile raf = new RandomAccessFile(file, "rw")) {
+            long len = raf.length();
+            long pos = 0;
+            while (pos + 8 <= len) {
+                raf.seek(pos);
+                long size = raf.readInt() & 0xffffffffL;
+                byte[] type = new byte[4];
+                raf.readFully(type);
+                long header = 8;
+                if (size == 1) {
+                    size = raf.readLong();
+                    header = 16;
+                } else if (size == 0) {
+                    return;   // already runs to EOF
+                }
+                if (type[0] == 'm' && type[1] == 'd' && type[2] == 'a' && type[3] == 't') {
+                    if (size > len - pos) {
+                        long actual = len - pos;
+                        raf.seek(pos + (header == 16 ? 8 : 0));
+                        if (header == 16) raf.writeLong(actual);
+                        else raf.writeInt((int) actual);
+                        Log.i(TAG, "trimmed mdat " + size + " -> " + actual);
+                    }
+                    return;
+                }
+                if (size < header) return;
+                pos += size;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "repair " + e.getMessage());
+        }
     }
 
     private static void trim(File dir) {
@@ -379,6 +428,7 @@ final class PosterTrailer {
 
     /** Hide the clip immediately. Pending resolves are invalidated and no callback fires. */
     void stop() {
+        if (disposed) return;
         gen++;
         if (prepareTimeout != null) main.removeCallbacks(prepareTimeout);
         main.removeCallbacks(cap);
@@ -389,6 +439,7 @@ final class PosterTrailer {
     /** Queue a reset; never blocks the caller, which may well be the main thread. */
     private void stopPlayer() {
         active = false;
+        if (disposed) return;
         playerHandler.post(() -> {
             if (player != null) {
                 try {
@@ -412,7 +463,13 @@ final class PosterTrailer {
         if (listener != null) listener.onFinished();
     }
 
+    /**
+     * Free the player but keep the thread and the view: called when Home is trimmed in the
+     * background and comes back to the same stage. Quitting the looper here used to leave every
+     * later {@link #stop()} posting to a dead thread.
+     */
     void release() {
+        if (disposed) return;
         stop();
         playerHandler.post(() -> {
             if (player != null) {
@@ -423,8 +480,25 @@ final class PosterTrailer {
                 player = null;
             }
         });
-        if (android.os.Build.VERSION.SDK_INT >= 18) playerHandler.getLooper().quitSafely();
-        else playerHandler.getLooper().quit();
+    }
+
+    /** Shut down for good, when the activity is destroyed. The trailer cannot play after this. */
+    void dispose() {
+        if (disposed) return;
+        stop();
+        playerHandler.post(() -> {
+            if (player != null) {
+                try {
+                    player.release();
+                } catch (Exception ignored) {
+                }
+                player = null;
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 18) playerHandler.getLooper().quitSafely();
+            else playerHandler.getLooper().quit();
+        });
+        // Set before detaching: releaseSurfaceTexture calls stop(), which must not post again.
+        disposed = true;
         ViewParent parent = video.getParent();
         if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(video);
     }

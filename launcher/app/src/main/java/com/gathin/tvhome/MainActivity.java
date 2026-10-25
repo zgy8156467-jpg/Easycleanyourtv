@@ -1,5 +1,6 @@
 package com.gathin.tvhome;
 
+import android.Manifest;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -14,7 +15,9 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
+import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -33,6 +36,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
 import android.media.tv.TvInputManager;
 import android.net.Uri;
+import android.content.ContentUris;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
@@ -41,6 +45,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -103,6 +108,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private static final int REQ_UNINSTALL = 42;
     private static final int REQ_INSTALL_STORAGE = 43;
     private static final int REQ_WIFI_SCAN = 44;
+    private static final int REQ_READ_PHOTOS = 45;
+    /** The wallpaper picker waits for the storage grant that the photo grid needs. */
+    private boolean photosAfterGrant;
+    /** The local picture grid, so Back can close it. */
+    private PopupWindow photoPanel;
     /** APK waiting for the storage permission Android 6 needs before the installer can read it. */
     private java.io.File pendingInstall;
     /** The Wi-Fi sheet is waiting for the location grant scanning needs. */
@@ -227,6 +237,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (DeviceProfile.isPhone(this)) {
+            // A phone gets its own screen, not this activity half-built: onResume assumes the desk
+            // and everything below has been created. CLEAR_TASK keeps repeated Home presses from
+            // stacking notices on top of each other.
+            Intent notice = new Intent(this, PhoneNoticeActivity.class);
+            notice.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+            startActivity(notice);
+            finish();
+            return;
+        }
         // A crash is a black window on a TV. Show the saved report before building the desk, so the
         // next launch is a picture the user can photograph instead of nothing.
         if (CrashLog.has(this)) {
@@ -595,7 +615,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     @Override
     protected void onDestroy() {
         live = null;
-        if (stage != null) stage.release();
+        if (stage != null) stage.dispose();
         super.onDestroy();
     }
 
@@ -612,6 +632,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (dockPicker != null && dockPicker.isShowing()) {
             dockPicker.dismiss();
             return;
+        }
+        if (photoPanel != null && photoPanel.isShowing()) {
+            photoPanel.dismiss();
         }
         if (cityPicker != null && cityPicker.isShowing()) {
             cityPicker.dismiss();
@@ -1192,7 +1215,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         });
         panel.findViewById(R.id.rowTvPicture).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
-            open(systemIntent(Settings.ACTION_DISPLAY_SETTINGS));
+            open(pictureIntent(this));
         });
         panel.findViewById(R.id.rowTvApps).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
@@ -1233,16 +1256,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         rowRestore.setOnClickListener(v -> uninstallSelf());
 
         rowPick.setOnClickListener(v -> {
-            Intent pick = new Intent(Build.VERSION.SDK_INT >= 19
-                    ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_GET_CONTENT)
-                    .addCategory(Intent.CATEGORY_OPENABLE)
-                    .setType("image/*");
-            try {
-                wallpaperPanel.dismiss();
-                startActivityForResult(pick, REQ_PICK_WALLPAPER);
-            } catch (RuntimeException e) {
-                toast(getString(R.string.not_available));
-            }
+            wallpaperPanel.dismiss();
+            openPhotoPicker();
         });
 
         rowOff.setOnClickListener(v -> {
@@ -1335,10 +1350,164 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         }
     }
 
+    /**
+     * A photo grid of our own, because the system picker on an Android 14 TV is a touch UI — the
+     * remote cannot put focus on a picture — and Xiaomi's OPEN_DOCUMENT handler is an AOSP stub.
+     * The nine most recent pictures are enough to find the one just copied onto the set.
+     */
+    private void openPhotoPicker() {
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(
+                Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            photosAfterGrant = true;
+            requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
+                    REQ_READ_PHOTOS);
+            return;
+        }
+        showPhotoChooser();
+    }
+
+    private void showPhotoChooser() {
+        final List<Uri> photos = new ArrayList<>();
+        Cursor c = null;
+        try {
+            c = getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    new String[]{MediaStore.Images.Media._ID},
+                    null, null, MediaStore.Images.Media.DATE_ADDED + " DESC");
+            while (c != null && c.moveToNext() && photos.size() < 9) {
+                photos.add(ContentUris.withAppendedId(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0)));
+            }
+        } catch (RuntimeException ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+        if (photos.isEmpty()) {
+            toast(getString(R.string.no_photos));
+            return;
+        }
+        if (photoPanel != null && photoPanel.isShowing()) return;
+
+        View panel = getLayoutInflater().inflate(R.layout.popup_photos, root, false);
+        ((TextView) panel.findViewById(R.id.photosTitle)).setText(R.string.choose_photo);
+        LinearLayout rows = panel.findViewById(R.id.photoRows);
+        LinearLayout line = null;
+        final List<ImageView> thumbs = new ArrayList<>();
+        for (int i = 0; i < photos.size(); i++) {
+            if (i % 3 == 0) {
+                line = new LinearLayout(this);
+                line.setOrientation(LinearLayout.HORIZONTAL);
+                line.setGravity(Gravity.CENTER);
+                rows.addView(line, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            final Uri uri = photos.get(i);
+            FrameLayout cell = new FrameLayout(this);
+            cell.setFocusable(true);
+            cell.setClickable(true);
+            cell.setPadding((int) (2 * density), (int) (2 * density),
+                    (int) (2 * density), (int) (2 * density));
+            cell.setBackgroundResource(R.drawable.photo_cell_bg);
+            ImageView thumb = new ImageView(this);
+            thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            cell.addView(thumb, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    (int) (98 * density), (int) (56 * density));
+            lp.setMargins((int) (3 * density), (int) (3 * density),
+                    (int) (3 * density), (int) (3 * density));
+            line.addView(cell, lp);
+            cell.setOnClickListener(v -> {
+                photoPanel.dismiss();
+                if (wall == null) wall = new Wallpaper(this);
+                if (wall.importFrom(uri)) {
+                    toast(getString(R.string.wallpaper_set));
+                    applyWallpaper();
+                } else {
+                    toast(getString(R.string.wallpaper_bad));
+                }
+            });
+            thumbs.add(thumb);
+        }
+        View anchor = findViewById(R.id.btnControl);
+        photoPanel = glassPanel(panel, anchor, 340);
+        dropIn(photoPanel, panel, anchor, Gravity.END);
+        final LinearLayout firstLine = line;
+        panel.post(() -> firstLine.getChildAt(0).requestFocus());
+        loadPhotoThumbs(photos, thumbs);
+    }
+
+    /** Decoded off the main thread: a 4K photo takes long enough to drop frames. */
+    private void loadPhotoThumbs(final List<Uri> photos, final List<ImageView> thumbs) {
+        final Handler ui = new Handler(Looper.getMainLooper());
+        new Thread(() -> {
+            for (int i = 0; i < photos.size(); i++) {
+                final Bitmap thumb = photoThumb(photos.get(i));
+                if (thumb == null) continue;
+                final ImageView view = thumbs.get(i);
+                ui.post(() -> {
+                    if (!isFinishing()) view.setImageBitmap(thumb);
+                });
+            }
+        }, "photo-thumbs").start();
+    }
+
+    private Bitmap photoThumb(Uri uri) {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                return getContentResolver().loadThumbnail(uri,
+                        new android.util.Size((int) (196 * density), (int) (112 * density)), null);
+            }
+            InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) return null;
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeStream(in, null, bounds);
+            in.close();
+            int sample = 1;
+            while (bounds.outWidth / (sample * 2) >= 196 * density) sample *= 2;
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            in = getContentResolver().openInputStream(uri);
+            Bitmap b = in == null ? null : BitmapFactory.decodeStream(in, null, opts);
+            if (in != null) in.close();
+            return b;
+        } catch (Exception | OutOfMemoryError e) {
+            return null;
+        }
+    }
+
+    /** The system picker, for sets where it is remote-friendly. */
+    private void startSystemPicker() {
+        Intent pick = new Intent(Intent.ACTION_GET_CONTENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("image/*");
+        if (!resolvesReal(this, pick) && Build.VERSION.SDK_INT >= 19) {
+            pick = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("image/*");
+        }
+        try {
+            startActivityForResult(pick, REQ_PICK_WALLPAPER);
+        } catch (RuntimeException e) {
+            toast(getString(R.string.not_available));
+        }
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions,
                                            int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_READ_PHOTOS) {
+            if (!photosAfterGrant) return;
+            photosAfterGrant = false;
+            if (grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                showPhotoChooser();
+            } else {
+                startSystemPicker();   // a set whose picker handles the remote after all
+            }
+            return;
+        }
         if (requestCode == REQ_WIFI_SCAN) {
             if (!wifiPanelAfterGrant) return;
             wifiPanelAfterGrant = false;
@@ -2286,6 +2455,32 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     }
 
     /**
+     * Picture settings. Xiaomi HyperOS 3 (MiTV-MFFU0, Android 14) has no handler for
+     * {@code android.settings.DISPLAY_SETTINGS}, and its own {@code entry.DisplaySoundActivity} is
+     * declared in the manifest but missing from the APK — launching it throws ClassNotFoundException
+     * in the settings process and lands back on the desk. AOSP TV's display &amp; sound page is the
+     * one that actually opens there.
+     */
+    static Intent pictureIntent(android.content.Context ctx) {
+        Intent standard = new Intent(Settings.ACTION_DISPLAY_SETTINGS);
+        if (resolvesReal(ctx, standard)) return standard;
+        try {
+            ctx.getPackageManager().getPackageInfo("com.android.tv.settings", 0);
+            return new Intent().setComponent(new ComponentName("com.android.tv.settings",
+                    "com.android.tv.settings.device.displaysound.DisplaySoundActivity"));
+        } catch (Exception ignored) {
+        }
+        return tvSettingsIntent(ctx);
+    }
+
+    /** Resolved to something other than the AOSP TV stub screens, which are dead ends. */
+    static boolean resolvesReal(android.content.Context ctx, Intent intent) {
+        ResolveInfo ri = ctx.getPackageManager().resolveActivity(intent, 0);
+        return ri != null && ri.activityInfo != null
+                && !"com.android.tv.frameworkpackagestubs".equals(ri.activityInfo.packageName);
+    }
+
+    /**
      * Launcher entry of the vendor settings app for this profile, or null. MIUI TV's settings app
      * only opens through its explicit main activity; the others are ordinary launch intents.
      */
@@ -2395,6 +2590,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             openSourcePanel();
             return;
         }
+        // Xiaomi's tvplayer declares no launcher category, so the app-level Live TV lookup above
+        // finds nothing even when the set has a tuner. Its DTMB page is the live TV screen.
+        if (liveTv == null && tunerId != null) liveTv = XiaomiSource.liveTvIntent(this);
         if (liveTv != null) {
             if (rows.getChildCount() > 0) addSeparator(rows);
             final Intent liveTvIntent = liveTv;
@@ -2914,7 +3112,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         View panel = getLayoutInflater().inflate(R.layout.popup_update, root, false);
         ((TextView) panel.findViewById(R.id.updateTitle)).setText(R.string.a11y_guide_title);
         TextView notes = panel.findViewById(R.id.updateNotes);
-        notes.setText(R.string.a11y_guide_notes);
+        notes.setText(getString(R.string.a11y_guide_notes, getPackageName()));
         notes.setMaxLines(Integer.MAX_VALUE);
         notes.setEllipsize(null);
         panel.findViewById(R.id.updateStatus).setVisibility(View.GONE);
@@ -3007,7 +3205,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                                     REQ_INSTALL_STORAGE);
                             return;
                         }
-                        if (!Remote.install(MainActivity.this, apk)) {
+                        if (!Remote.canSelfInstall(MainActivity.this)) {
+                            showManualInstall(update, apk);
+                        } else if (!Remote.install(MainActivity.this, apk)) {
                             toast(getString(R.string.not_available));
                         } else if (switching) {
                             toast(getString(R.string.stable_started));
@@ -3023,6 +3223,48 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             popup.dismiss();
         });
 
+        popup.showAtLocation(root, Gravity.CENTER, 0, 0);
+        panel.post(go::requestFocus);
+    }
+
+    /**
+     * The ROM's installer cannot be started by an app (see {@link Remote#canSelfInstall}), so park
+     * the APK in Downloads and tell the user to install it with the firmware's file manager.
+     */
+    private void showManualInstall(final Remote.Update update, final java.io.File apk) {
+        String name = "tvhome-"
+                + (update.name.isEmpty() ? String.valueOf(update.code) : update.name) + ".apk";
+        String saved = Remote.exportToDownloads(this, apk, name);
+        if (saved == null) {
+            toast(getString(R.string.update_manual_failed));
+            return;
+        }
+        showManualSaved(saved);
+    }
+
+    private void showManualSaved(final String saved) {
+        if (isFinishing() || (updatePanel != null && updatePanel.isShowing())) return;
+        if (root.getWindowToken() == null) {
+            root.post(() -> showManualSaved(saved));
+            return;
+        }
+        View panel = getLayoutInflater().inflate(R.layout.popup_update, root, false);
+        ((TextView) panel.findViewById(R.id.updateTitle)).setText(R.string.update_manual_title);
+        TextView notes = panel.findViewById(R.id.updateNotes);
+        notes.setText(getString(R.string.update_manual_notes, saved));
+        notes.setMaxLines(Integer.MAX_VALUE);
+        notes.setEllipsize(null);
+        panel.findViewById(R.id.updateStatus).setVisibility(View.GONE);
+        TextView go = panel.findViewById(R.id.updateGo);
+        go.setText(R.string.update_manual_ok);
+        panel.findViewById(R.id.updateLater).setVisibility(View.GONE);
+
+        final PopupWindow popup = new PopupWindow(panel,
+                Math.min(dp(560), (int) (getResources().getDisplayMetrics().widthPixels * 0.82f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        go.setOnClickListener(v -> popup.dismiss());
         popup.showAtLocation(root, Gravity.CENTER, 0, 0);
         panel.post(go::requestFocus);
     }

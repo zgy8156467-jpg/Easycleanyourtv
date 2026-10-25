@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The local picture grid. The system photo picker on an Android 14 TV is touch only, so this
+     panel is what the remote can actually drive. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/panel"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/glass_panel"
+    android:padding="6dp"
+    android:elevation="12dp">
+
+    <TextView
+        android:id="@+id/photosTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingLeft="10dp"
+        android:paddingStart="10dp"
+        android:paddingRight="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:textColor="#D9FFFFFF"
+        android:textSize="13sp"
+        android:textAllCaps="false"
+        android:fontFamily="@font/outfit"
+        android:fontVariationSettings="'wght' 600" />
+
+    <LinearLayout
+        android:id="@+id/photoRows"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+</LinearLayout>

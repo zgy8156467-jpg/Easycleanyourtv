@@ -35,6 +35,20 @@ BRAND_FIX = {
 }
 
 
+# Upstream rows that our own bench run has corrected. Matched on the code-name
+# cell, so a README update that renames the model still lands here.
+# Columns are 系统版本 / 代际 / 建议渠道 / 备注 (品牌, 型号, 代号 stay as upstream says).
+PATCHES = {
+    "MiTV-MFFU0": {
+        3: "Android 14 (HyperOS 3, CN build)",
+        4: "新",
+        5: "idun 定制版",
+        6: "实测固件 OS4.0.11.0.UFFMATV，4 GB RAM；国内版；HOME 只认 com.thunderstone.idun.dev "
+           "包名；应用内更新装不了，只能 U 盘 + 电视管家或 adb install；显示页、选图、直播电视已单独适配",
+    },
+}
+
+
 def parse_table():
     lines = README.read_text(encoding="utf-8").splitlines()
     start = next(i for i, l in enumerate(lines) if l.startswith("| TV | OS |"))
@@ -131,6 +145,11 @@ def build_rows():
             channel(v),
             "；".join(note_bits),
         ])
+    for row in out:
+        for code, patch in PATCHES.items():
+            if code in row[2]:
+                for col, value in patch.items():
+                    row[col] = value
     return out
 
 

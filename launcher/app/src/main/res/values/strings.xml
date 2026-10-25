@@ -33,6 +33,8 @@
     <string name="bing_updated">Wallpaper updated</string>
     <string name="bing_failed">Could not fetch the picture</string>
     <string name="pick_wallpaper">Choose a picture on this TV</string>
+    <string name="choose_photo">Choose a picture</string>
+    <string name="no_photos">No pictures found on this TV</string>
     <string name="wallpaper_off">Remove the wallpaper</string>
     <string name="wallpaper_on">On · %1$d KB (replaced daily)</string>
     <string name="wallpaper_none">None · the desk is black</string>
@@ -96,6 +98,10 @@
     <string name="update_downloading">Downloading %1$d%%</string>
     <string name="update_download_failed">Download failed. Try again later.</string>
     <string name="update_install_failed">Install failed. Try again later.</string>
+    <string name="update_manual_title">This one has to be installed by hand</string>
+    <string name="update_manual_notes">Saved as %1$s in Downloads. This TV\'s system installer cannot be opened by an app: copy the file to a USB drive and use 电视管家 → U盘安装包 on the TV, or run adb install -r from a computer.</string>
+    <string name="update_manual_ok">Got it</string>
+    <string name="update_manual_failed">Could not save the update to Downloads. Try again later.</string>
     <string name="update_meta">Current %1$s · %2$s</string>
     <string name="update_no_notes">No release notes.</string>
     <string name="check_update">Check for updates</string>
@@ -115,7 +121,7 @@
     <string name="a11y_first_title">Make Home come back here</string>
     <string name="a11y_first_notes">Turn on “Home key to top” in Accessibility, and allow Usage access for this app, so the remote’s Home button returns to this desk.</string>
     <string name="a11y_guide_title">Turn Home takeover on over ADB</string>
-    <string name="a11y_guide_notes">This TV has no Accessibility page — the vendor removed it. The switch can only be set from a computer, once.\nTake a photo of this screen, then follow the steps below.\n\n1. On the TV: Settings → General → About this TV → TV information → More information. Stay on that page and press Up Up Down Down Left Right Left Right to open the factory menu, then General → ADB switch → On and reboot.\n2. On a computer on the same network:\nadb connect YOUR_TV_IP:5555\nadb shell settings put secure enabled_accessibility_services com.gathin.tvhome/.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set com.gathin.tvhome GET_USAGE_STATS allow\n\nEvery app update turns it off again; re-run the two settings commands after updating.</string>
+    <string name="a11y_guide_notes">This TV has no Accessibility page — the vendor removed it. The switch can only be set from a computer, once.\nTake a photo of this screen, then follow the steps below.\n\n1. On the TV: Settings → General → About this TV → TV information → More information. Stay on that page and press Up Up Down Down Left Right Left Right to open the factory menu, then General → ADB switch → On and reboot.\n2. On a computer on the same network:\nadb connect YOUR_TV_IP:5555\nadb shell settings put secure enabled_accessibility_services %1$s/com.gathin.tvhome.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set %1$s GET_USAGE_STATS allow\n\nEvery app update turns it off again; re-run the two settings commands after updating.</string>
     <string name="a11y_guide_ok">Got it</string>
     <string name="no_apps">No TV apps found</string>
     <string name="weather_clear">Clear</string>
@@ -175,4 +181,8 @@
     <string name="wifi_off">Wi-Fi is off</string>
     <string name="wifi_no_networks">No networks found</string>
     <string name="mi_home">Mi Home</string>
+    <string name="phone_title">This is a TV launcher</string>
+    <string name="phone_body">It runs on TVs, projectors and TV boxes only.\nOn a phone, please uninstall it and go back to the phone\'s own home screen.</string>
+    <string name="phone_uninstall">Uninstall</string>
+    <string name="phone_exit">Exit</string>
 </resources>

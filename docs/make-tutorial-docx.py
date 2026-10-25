@@ -88,7 +88,7 @@ def main():
     normal.font.size = Pt(11)
     normal.element.rPr.rFonts.set(qn("w:eastAsia"), EAST)
 
-    para(doc, "电视桌面 2.0.2 安装教程", size=20, bold=True, space_after=4)
+    para(doc, "电视桌面 2.0.15 安装教程", size=20, bold=True, space_after=4)
     para(doc, "适用于小米、创维等品牌的安卓电视（Android 6.0 及以上）。装它不改系统、不删原厂应用，"
               "原厂桌面还在，只是被盖住；不想用了随时恢复。安卓 4.0–5.1 的老电视装「老设备版」，"
               "见第七节。", size=10.5, color=(0x55, 0x50, 0x4B))
@@ -102,8 +102,9 @@ def main():
     para(doc, "", space_after=2)
 
     h1(doc, "一、准备")
-    bullet(doc, "U 盘一个，FAT32 格式，把 tvhome-zh-2.0.2.apk 拷到根目录。老电视用 tvhome-zh-2.0.2-legacy.apk。")
+    bullet(doc, "U 盘一个，FAT32 格式，把 tvhome-zh-2.0.15.apk 拷到根目录。老电视用 tvhome-zh-2.0.15-legacy.apk。")
     bullet(doc, "电视能上网。热播封面和片段需要联网，第一次打开会慢一点。")
+    bullet(doc, "手机不能装：2.0.15 起在手机上打开会提示「这是电视桌面」，并可直接卸载。本应用只支持电视、投影仪和电视盒子。")
 
     h1(doc, "二、安装")
     bullet(doc, "U 盘插到电视 USB 口。")
@@ -160,7 +161,7 @@ def main():
     para(doc, "电视要先打开 ADB 调试。脚本会自动关掉接管、撤销权限、卸载桌面，跑完重启电视即可。")
 
     h1(doc, "七、老电视（安卓 4.x / 5.x）")
-    para(doc, "安卓 6.0 以下的电视装 tvhome-zh-2.0.2-legacy.apk，界面和用法一样，区别在下面几点。")
+    para(doc, "安卓 6.0 以下的电视装 tvhome-zh-2.0.15-legacy.apk，界面和用法一样，区别在下面几点。")
     bullet(doc, "装哪个：安卓 6.0 及以上装普通版，4.0–5.1 装老设备版。"
                 "装错了系统会拒绝安装，不会把电视弄坏。")
     bullet(doc, "权限只开无障碍：安卓 4.4 及以下没有「使用情况访问」，只开无障碍就够；"
@@ -174,13 +175,13 @@ def main():
     bullet(doc, "开机先进了原厂桌面：正常，几秒内自动盖回来。")
     bullet(doc, "按 Home 还是回原厂：检查两个权限是不是都开了；重装过的话无障碍会掉，重新打开一次。")
     bullet(doc, "点「下载并安装」提示「此电视不支持」：1.7.1 及以前的小米电视会这样。"
-                "用这个包手动装一次 2.0.2，之后再升级就正常了。")
+                "用这个包手动装一次 2.0.15，之后再升级就正常了。")
     bullet(doc, "海报没有图：先确认电视联网；第一次打开要拉一遍数据，稍等一会儿。")
     bullet(doc, "遥控器失灵：长按电视电源键重启。还不行就跑一键恢复。")
     bullet(doc, "恢复后想再装：U 盘再装一次就行。")
 
     para(doc, "", space_after=2)
-    para(doc, "— 电视桌面 2.0.2 · 2026-10", size=9, color=(0x88, 0x84, 0x80))
+    para(doc, "— 电视桌面 2.0.15 · 2026-10", size=9, color=(0x88, 0x84, 0x80))
 
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "安装与恢复教程.docx")
     doc.save(out)

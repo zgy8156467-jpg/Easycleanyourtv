@@ -1,13 +1,16 @@
 package com.gathin.tvhome;
 
 import android.app.PendingIntent;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.provider.MediaStore;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -272,6 +275,11 @@ final class Remote {
      * console shows which shape the TV refused.
      */
     static boolean install(Context context, File apk) {
+        // Do it here, not at launch: the launcher itself restarts while its own update installs, and
+        // abandoning sessions from onCreate killed the install that was still committing (the TV
+        // then showed its install-failed dialog). Before a new install is exactly where leftovers
+        // from a crashed attempt get in the way.
+        clearStaleSessions(context);
         // Android 4.x-6.x installers take a file:// URI directly, and this is the same path a file
         // manager takes. Prefer it there: MIUI TV 6 (Android 6) shows its confirmation UI for a
         // PackageInstaller session but then fails the session with INSTALL_FAILED_USER_RESTRICTED,
@@ -328,6 +336,74 @@ final class Remote {
         return false;
     }
 
+    /**
+     * Whether this ROM can install an APK started by the app at all. Android 10+ hands a session
+     * commit to the firmware installer's {@code android.content.pm.action.CONFIRM_INSTALL} entry.
+     * MiTV's installer on HyperOS 3 (10.5.7, built against pre-Android 10) never declared it, so
+     * the session waits forever, and its VIEW route crashes the installer process on Android 14
+     * ({@code NoClassDefFoundError: PackageUserState} — the class was removed). On ROMs like that
+     * the launcher must save the APK and let the user install it with the firmware's own file
+     * manager, which runs privileged and does not use this path.
+     */
+    static boolean canSelfInstall(Context context) {
+        if (Build.VERSION.SDK_INT < 29) return true;
+        PackageManager pm = context.getPackageManager();
+        try {
+            if (!pm.queryIntentActivities(new Intent("android.content.pm.action.CONFIRM_INSTALL")
+                    .addCategory(Intent.CATEGORY_DEFAULT), 0).isEmpty()) {
+                return true;
+            }
+            // No session confirmation. The VIEW route is the only one left, and an installer built
+            // for pre-Android 10 links against framework classes Android 14 no longer ships.
+            PackageInfo installer = pm.getPackageInfo("com.android.packageinstaller", 0);
+            return installer.applicationInfo != null
+                    && installer.applicationInfo.targetSdkVersion >= 29;
+        } catch (Exception e) {
+            return true; // unknown ROM: keep the old behaviour, the caller records the failure
+        }
+    }
+
+    /**
+     * Copies a downloaded update into the public Download folder so the TV's file manager can
+     * install it. Returns the display name it landed under, or null when the copy failed.
+     */
+    static String exportToDownloads(Context context, File apk, String name) {
+        if (Build.VERSION.SDK_INT < 29) return null;
+        ContentValues insert = new ContentValues();
+        insert.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+        insert.put(MediaStore.MediaColumns.MIME_TYPE, APK_MIME);
+        insert.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+        insert.put(MediaStore.MediaColumns.IS_PENDING, 1);
+        Uri uri = null;
+        try {
+            uri = context.getContentResolver().insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, insert);
+            if (uri == null) throw new IOException("no download uri");
+            try (OutputStream out = context.getContentResolver().openOutputStream(uri);
+                 InputStream in = new FileInputStream(apk)) {
+                if (out == null) throw new IOException("no output stream");
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+            ContentValues ready = new ContentValues();
+            ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            context.getContentResolver().update(uri, ready, null, null);
+            return name;
+        } catch (Exception e) {
+            Log.w(TAG, "export to downloads failed", e);
+            Errors.record("update", "export: "
+                    + e.getClass().getSimpleName() + " " + e.getMessage());
+            if (uri != null) {
+                try {
+                    context.getContentResolver().delete(uri, null, null);
+                } catch (Exception ignored) {
+                }
+            }
+            return null;
+        }
+    }
+
     /** Streams the APK into a PackageInstaller session; the system shows its own confirmation. */
     private static boolean installWithSession(Context context, File apk) {
         PackageInstaller installer = context.getPackageManager().getPackageInstaller();
@@ -356,6 +432,31 @@ final class Remote {
             Errors.record("update", "install session: "
                     + e.getClass().getSimpleName() + " " + e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Drops install sessions this app left behind, e.g. when it was killed mid-write. A stale
+     * session makes the next update fail with INSTALL_FAILED_PACKAGE_CHANGED before anything is
+     * installed, which on the TV looks like a bad APK.
+     *
+     * <p>Only sessions we created are visible to a normal app. The TV's own installer (MIUI runs
+     * its own) keeps its sessions to itself; those need adb or root.
+     */
+    static void clearStaleSessions(Context context) {
+        if (Build.VERSION.SDK_INT < 21) return;
+        try {
+            PackageInstaller installer = context.getPackageManager().getPackageInstaller();
+            if (installer == null) return;
+            for (PackageInstaller.SessionInfo info : installer.getMySessions()) {
+                try {
+                    installer.abandonSession(info.getSessionId());
+                    Log.i(TAG, "abandoned stale session " + info.getSessionId());
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "session cleanup failed", e);
         }
     }
 

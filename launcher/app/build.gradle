@@ -22,8 +22,8 @@ android {
         applicationId 'com.gathin.tvhome'
         minSdk 23
         targetSdk 29
-        versionCode 50
-        versionName '2.0.9'
+        versionCode 56
+        versionName '2.0.15'
         buildConfigField 'String', 'FEEDBACK_TOKEN', "\"${feedbackToken}\""
     }
 
@@ -62,6 +62,17 @@ android {
             buildConfigField 'String', 'CHANNEL', '"beta"'
             buildConfigField 'String', 'UPDATE_PATH', '"update-beta.json"'
             resValue 'string', 'app_name', 'Home Beta'
+        }
+        // Xiaomi HyperOS 3 (MiTV-MFFU0, 2026-10-25) only lets packages from its preset launcher
+        // identity hold the HOME role, so the desk has to install as that package. Everything else
+        // is the stable build; only the update channel differs, because update.json serves APKs
+        // with the standard applicationId and Android refuses those.
+        idun {
+            dimension 'tier'
+            minSdk 23
+            applicationId 'com.thunderstone.idun.dev'
+            buildConfigField 'String', 'CHANNEL', '"idun"'
+            buildConfigField 'String', 'UPDATE_PATH', '"update-idun.json"'
         }
     }
 

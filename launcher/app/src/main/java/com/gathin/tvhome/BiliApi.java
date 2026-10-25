@@ -6,7 +6,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.URL;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -15,11 +14,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Finds a real, playable trailer for a poster on Bilibili.
+ * Turns a poster's Bilibili video into a playable MP4.
  *
- * <p>iQiyi, Mango and Tencent stream only signed/DRM URLs; Bilibili's {@code playurl} still hands out
- * plain MP4s. Its own ranking already names a video per poster; the other three are matched by
- * searching the show's title for a 预告/片花.
+ * <p>Bilibili's {@code playurl} still hands out plain MP4s, which is why it is the only source;
+ * every poster written by {@code HotPosters} already names its bvid and cid.
  *
  * <p>Its main CDN ({@code *.edge.mountaintoys.cn}) chains to GlobalSign Root R46, which this TV's
  * certificate store does not have. The backup hosts on {@code *.bilivideo.com} chain to R3/R5 and do
@@ -77,16 +75,17 @@ final class BiliApi {
                 }
             }
 
-            if (bvid == null || bvid.isEmpty()) {
-                if (poster.title.isEmpty()) return null;
-                bvid = search(poster.title);
-                if (bvid == null) {
-                    Log.i(TAG, "no search hit for " + poster.title);
+            // Every poster the current source writes names its video and its cid; the lookup below
+            // only runs for a sidecar written by an older build.
+            if (bvid == null || bvid.isEmpty()) return null;
+            if (cid <= 0) {
+                Meta m = meta(bvid);
+                if (m != null && m.known && !m.wide) {
+                    Log.i(TAG, "skip portrait " + bvid);
                     return null;
                 }
-                cid = 0;
+                cid = m == null ? 0 : m.cid;
             }
-            if (cid <= 0) cid = viewCid(bvid);
             if (cid <= 0) return null;
 
             List<String> urls = playUrls(bvid, cid);
@@ -109,83 +108,57 @@ final class BiliApi {
         }
     }
 
-    /** Pick the best-looking "show + 预告" result. Bilibili search needs the buvid cookies. */
-    private static String search(String show) {
-        try {
-            String keyword = URLEncoder.encode(show + " 预告", "UTF-8");
-            String json = HotPosters.biliDoc(
-                    "/x/web-interface/search/type?search_type=video&keyword=" + keyword,
-                    REFERER, HotPosters.bilibiliCookie());
-            if (json == null) return null;
-            JSONObject data = new JSONObject(json).optJSONObject("data");
-            JSONArray result = data == null ? null : data.optJSONArray("result");
-            if (result == null) return null;
-            String best = null;
-            int bestScore = Integer.MIN_VALUE;
-            for (int i = 0; i < result.length(); i++) {
-                JSONObject o = result.optJSONObject(i);
-                if (o == null) continue;
-                String bvid = o.optString("bvid", "");
-                if (bvid.isEmpty()) continue;
-                String title = o.optString("title", "").replaceAll("<[^>]+>", "");
-                int seconds = duration(o.optString("duration", ""));
-                int score = score(title, seconds);
-                if (score > bestScore) {
-                    bestScore = score;
-                    best = bvid;
-                }
-            }
-            if (best != null) Log.i(TAG, "search " + show + " -> " + best + " (" + bestScore + ")");
-            return best;
-        } catch (Exception e) {
-            Log.w(TAG, "search " + show + ": " + e.getMessage());
-            return null;
+    /** A video's first cid plus whether its picture is 16:9. */
+    private static final class Meta {
+        long cid;
+        boolean wide;
+        /** False when the dimension was missing from the response: keep such videos. */
+        boolean known;
+    }
+
+    private static final Map<String, Meta> metas = new java.util.LinkedHashMap<String, Meta>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Meta> eldest) {
+            return size() > 300;
         }
-    }
+    };
 
-    private static int score(String title, int seconds) {
-        int score = 0;
-        if (title.contains("预告")) score += 100;
-        if (title.contains("片花")) score += 90;
-        if (title.contains("定档")) score += 60;
-        if (title.contains("抢先")) score += 40;
-        if (title.contains("花絮")) score += 20;
-        if (seconds >= 20 && seconds <= 300) score += 50;
-        else if (seconds > 300 && seconds <= 600) score += 10;
-        else if (seconds > 600) score -= 80;
-        else if (seconds > 0) score -= 50;
-        return score;
-    }
-
-    /** "4:56", "12:30" or "1:02:03" to seconds; 0 when unknown. */
-    private static int duration(String text) {
-        if (text == null || text.isEmpty()) return 0;
-        String[] parts = text.split(":");
-        try {
-            int total = 0;
-            for (String p : parts) total = total * 60 + Integer.parseInt(p.trim());
-            return total;
-        } catch (NumberFormatException e) {
-            return 0;
+    /** Cached {@code view} lookup; null when the API gave no answer at all. */
+    private static Meta meta(String bvid) {
+        synchronized (metas) {
+            Meta cached = metas.get(bvid);
+            if (cached != null) return cached;
         }
-    }
-
-    private static long viewCid(String bvid) {
         String json = HotPosters.biliDoc(
                 "/x/web-interface/view?bvid=" + bvid,
                 REFERER, HotPosters.bilibiliCookie());
-        if (json == null) return 0;
+        if (json == null) return null;
         try {
             JSONObject data = new JSONObject(json).optJSONObject("data");
-            if (data == null) return 0;
-            long cid = data.optLong("cid", 0);
-            if (cid > 0) return cid;
-            JSONArray pages = data.optJSONArray("pages");
-            if (pages != null && pages.length() > 0) return pages.optJSONObject(0).optLong("cid", 0);
+            if (data == null) return null;
+            Meta m = new Meta();
+            m.cid = data.optLong("cid", 0);
+            if (m.cid <= 0) {
+                JSONArray pages = data.optJSONArray("pages");
+                if (pages != null && pages.length() > 0) m.cid = pages.optJSONObject(0).optLong("cid", 0);
+            }
+            JSONObject dim = data.optJSONObject("dimension");
+            if (dim != null) {
+                int w = dim.optInt("width", 0);
+                int h = dim.optInt("height", 0);
+                if (w > 0 && h > 0) {
+                    m.known = true;
+                    m.wide = Aspect.wide(w, h, dim.optInt("rotate", 0));
+                }
+            }
+            synchronized (metas) {
+                metas.put(bvid, m);
+            }
+            return m;
         } catch (Exception e) {
             Log.w(TAG, "view " + bvid + ": " + e.getMessage());
+            return null;
         }
-        return 0;
     }
 
     private static List<String> playUrls(String bvid, long cid) {

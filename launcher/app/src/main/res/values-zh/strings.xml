@@ -33,6 +33,8 @@
     <string name="bing_updated">壁纸已更新</string>
     <string name="bing_failed">获取失败，请检查网络</string>
     <string name="pick_wallpaper">从电视中选择图片</string>
+    <string name="choose_photo">选择图片</string>
+    <string name="no_photos">电视上没有找到图片</string>
     <string name="wallpaper_off">移除壁纸</string>
     <string name="wallpaper_on">已开启 · %1$d KB（每天自动替换）</string>
     <string name="wallpaper_none">未设置 · 桌面为纯黑</string>
@@ -96,6 +98,10 @@
     <string name="update_downloading">下载中 %1$d%%</string>
     <string name="update_download_failed">下载失败，稍后再试</string>
     <string name="update_install_failed">安装失败，稍后再试</string>
+    <string name="update_manual_title">这次要手动装</string>
+    <string name="update_manual_notes">安装包已存到「下载」，文件名 %1$s。这台电视的系统安装器不让应用自己调起：把安装包拷到 U 盘，插到电视后用「电视管家 → U盘安装包」安装；或者在电脑上执行 adb install -r 安装。</string>
+    <string name="update_manual_ok">知道了</string>
+    <string name="update_manual_failed">安装包存到「下载」失败，稍后再试</string>
     <string name="update_meta">当前 %1$s · %2$s</string>
     <string name="check_update">检查更新</string>
     <string name="update_checking">正在检查更新…</string>
@@ -114,7 +120,7 @@
     <string name="a11y_first_title">让 Home 键回到这个桌面</string>
     <string name="a11y_first_notes">到「设置 → 无障碍 → Home 键回顶」打开，再在「使用情况访问」里允许「电视桌面」。不开也能用，但按 Home 会回原厂桌面。</string>
     <string name="a11y_guide_title">这台电视要用 ADB 打开 Home 键接管</string>
-    <string name="a11y_guide_notes">创维/酷开系统没有无障碍设置页，只能从电脑用 ADB 开一次。\n拍照保存并按指示操作。\n\n1. 电视上进工厂菜单：设置 → 通用 → 关于本机 → 本机信息 → 更多信息，停在这个页面按 上上下下左右左右，进「通用设置」把「ADB开关」打开，再重启电视。\n2. 电脑连同一个 Wi-Fi，执行：\nadb connect 【你的电视IP地址】:5555\nadb shell settings put secure enabled_accessibility_services com.gathin.tvhome/.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set com.gathin.tvhome GET_USAGE_STATS allow\n\n桌面每次升级系统都会关掉它，升级后重跑中间两条 settings 命令。</string>
+    <string name="a11y_guide_notes">创维/酷开系统没有无障碍设置页，只能从电脑用 ADB 开一次。\n拍照保存并按指示操作。\n\n1. 电视上进工厂菜单：设置 → 通用 → 关于本机 → 本机信息 → 更多信息，停在这个页面按 上上下下左右左右，进「通用设置」把「ADB开关」打开，再重启电视。\n2. 电脑连同一个 Wi-Fi，执行：\nadb connect 【你的电视IP地址】:5555\nadb shell settings put secure enabled_accessibility_services %1$s/com.gathin.tvhome.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set %1$s GET_USAGE_STATS allow\n\n桌面每次升级系统都会关掉它，升级后重跑中间两条 settings 命令。</string>
     <string name="a11y_guide_ok">知道了</string>
     <string name="update_no_notes">这个版本没有写更新说明。</string>
     <string name="no_apps">没有找到可显示的应用</string>
@@ -175,4 +181,8 @@
     <string name="wifi_off">Wi-Fi 已关闭</string>
     <string name="wifi_no_networks">没有找到网络</string>
     <string name="mi_home">米家</string>
+    <string name="phone_title">这是电视桌面</string>
+    <string name="phone_body">本应用只支持电视、投影仪和电视盒子。\n手机请卸载本应用，换回手机自带桌面。</string>
+    <string name="phone_uninstall">卸载本应用</string>
+    <string name="phone_exit">退出</string>
 </resources>

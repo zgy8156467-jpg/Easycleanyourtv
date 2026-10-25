@@ -9,5 +9,6 @@ public class TvHomeApp extends Application {
         super.onCreate();
         CrashLog.install(this);
         Errors.install(this);
+        HotPosters.init(this);
     }
 }

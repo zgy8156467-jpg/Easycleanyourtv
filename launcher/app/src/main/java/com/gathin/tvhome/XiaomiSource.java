@@ -80,4 +80,19 @@ final class XiaomiSource {
     static Intent panelIntent() {
         return new Intent(ACTION_PLAY).setClassName(TVPLAYER, ACTIVITY);
     }
+
+    /**
+     * The vendor's digital (DTMB) live TV page. tvplayer has no launcher category, so the usual
+     * launch-intent lookup misses it on sets that do report a tuner through tv_input (MiTV-MFFU0,
+     * Android 14). Null when the player is not installed.
+     */
+    static Intent liveTvIntent(Context ctx) {
+        try {
+            ctx.getPackageManager().getPackageInfo(TVPLAYER, 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return null;
+        }
+        return new Intent("com.xiaomi.mitv.tvplayer.DTMB_PLAY")
+                .setClassName(TVPLAYER, "com.xiaomi.mitv.tvplayer.dtmb.DTMBActivity");
+    }
 }

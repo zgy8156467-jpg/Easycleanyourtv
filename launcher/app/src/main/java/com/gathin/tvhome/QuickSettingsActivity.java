@@ -32,7 +32,7 @@ public final class QuickSettingsActivity extends Activity {
         addRow(rows, R.drawable.ic_settings, R.string.tv_settings, 0,
                 MainActivity.tvSettingsIntent(this));
         addRow(rows, R.drawable.ic_picture, R.string.quick_picture, 0,
-                new Intent(Settings.ACTION_DISPLAY_SETTINGS));
+                MainActivity.pictureIntent(this));
         addRow(rows, R.drawable.ic_wifi, R.string.quick_network, 0,
                 MainActivity.systemIntent(this, Settings.ACTION_WIFI_SETTINGS));
         Intent cast = MainActivity.castIntent(this);

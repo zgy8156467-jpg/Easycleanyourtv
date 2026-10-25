@@ -148,6 +148,33 @@ final class DeviceProfile {
         this.accessibilitySettings = accessibilitySettings;
     }
 
+    /**
+     * True on a handheld phone, where the desk refuses to start. TVs, projectors and TV boxes are
+     * let through even if their firmware gimmicks a touchscreen or telephony feature.
+     *
+     * <p>The checks are ordered: a device that calls itself TV or leanback passes no matter what
+     * else it reports (the Android TV emulator declares both touchscreen and telephony). Otherwise
+     * only a touch device can be a phone; a box or projector without a touch panel is never
+     * blocked. Of the touch devices, a cellular radio or a screen narrower than any TV marks a
+     * handheld — 600dp is below every TV and projector, and above a folded or unfolded phone.
+     *
+     * <p>Pure enough to be checked on its own:
+     * {@code javac -cp android.jar DeviceProfile.java /tmp/PhoneCheck.java && java ...}.
+     */
+    static boolean isPhone(Context ctx) {
+        PackageManager pm = ctx.getPackageManager();
+        return isPhone(pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                        || pm.hasSystemFeature(PackageManager.FEATURE_TELEVISION),
+                pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN),
+                pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY),
+                ctx.getResources().getConfiguration().smallestScreenWidthDp);
+    }
+
+    static boolean isPhone(boolean tv, boolean touch, boolean cellular, int smallestWidthDp) {
+        if (tv || !touch) return false;
+        return cellular || smallestWidthDp < 600;
+    }
+
     private static DeviceProfile cached;
 
     static synchronized DeviceProfile get(Context context) {

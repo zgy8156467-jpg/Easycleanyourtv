@@ -9,18 +9,22 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
 import android.graphics.Outline;
 import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.animation.OvershootInterpolator;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -80,6 +84,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
      * white slab instead of inside a halo.
      */
     static final float FOCUS_SCALE = 1.10f;
+    /** Names under the grid cards are always readable, a touch dimmer until their tile is focused. */
+    private static final float NAME_ALPHA = 0.78f;
 
     /** Weak boxes get the same look, applied instantly instead of tweened. */
     static boolean reducedMotion;
@@ -347,15 +353,23 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         }
         Canvas canvas = new Canvas(src);
         d.setBounds((n - dw) / 2, (n - dh) / 2, (n - dw) / 2 + dw, (n - dh) / 2 + dh);
-        d.draw(canvas);
+        try {
+            d.draw(canvas);
+        } catch (Throwable t) {
+            // Some vendor drawables (a LayerDrawable wrapping a zero-size VectorDrawable on an
+            // API 22 MiTV) throw while rendering into a bitmap. The untrimmed icon is fine.
+            src.recycle();
+            return d;
+        }
 
         int[] px = new int[n * n];
         src.getPixels(px, 0, n, 0, 0, n, n);
-        int l = n, t = n, r = -1, b = -1;
+        int l = n, t = n, r = -1, b = -1, opaque = 0;
         for (int y = 0; y < n; y++) {
             int row = y * n;
             for (int x = 0; x < n; x++) {
                 if ((px[row + x] >>> 24) > 16) {
+                    opaque++;
                     if (x < l) l = x;
                     if (x > r) r = x;
                     if (y < t) t = y;
@@ -368,8 +382,15 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             return d;
         }
 
+        // Only an icon that is a solid block of artwork has a background colour to carry across
+        // the tile. A logo drawn on transparency does not, and painting its own colour around it
+        // would swallow the logo.
+        int fill = opaque * 100 >= (r - l + 1) * (b - t + 1) * 85
+                ? edgeColor(px, n, l, t, r, b) : 0;
         int bw = r - l + 1, bh = b - t + 1;
-        int size = Math.round(64 * density);
+        // Keep the artwork at render size. The tile decides how big the icon is shown; shrinking
+        // the bitmap to a fixed 64dp first only made it soft once the icon was drawn larger.
+        int size = n;
         float scale = size / (float) Math.max(bw, bh);
         int ow = Math.max(1, Math.round(bw * scale));
         int oh = Math.max(1, Math.round(bh * scale));
@@ -381,7 +402,102 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 new RectF((size - ow) / 2f, (size - oh) / 2f, (size + ow) / 2f, (size + oh) / 2f),
                 new Paint(Paint.FILTER_BITMAP_FLAG));
         src.recycle();
-        return new BitmapDrawable(context.getResources(), out);
+        return new IconDrawable(context.getResources(), out, fill);
+    }
+
+    /**
+     * Most common opaque colour along the cropped artwork's edge, in 4-bit-per-channel buckets.
+     * 0 unless that one colour covers a good part of the border, so a photo or a busy edge does
+     * not get a band of some random colour. Used to carry the icon's background across the tile.
+     */
+    private static int edgeColor(int[] px, int n, int l, int t, int r, int b) {
+        int[] counts = new int[4096];
+        int total = 0;
+        for (int x = l; x <= r; x++) {
+            tally(counts, px[t * n + x]);
+            tally(counts, px[b * n + x]);
+            total += 2;
+        }
+        for (int y = t; y <= b; y++) {
+            tally(counts, px[y * n + l]);
+            tally(counts, px[y * n + r]);
+            total += 2;
+        }
+        int best = 0;
+        for (int i = 1; i < counts.length; i++) {
+            if (counts[i] > counts[best]) best = i;
+        }
+        if (counts[best] * 10 < total * 4) return 0;
+        int rr = ((best >> 8) & 0xF) * 17;
+        int gg = ((best >> 4) & 0xF) * 17;
+        int bb = (best & 0xF) * 17;
+        return 0xFF000000 | (rr << 16) | (gg << 8) | bb;
+    }
+
+    private static void tally(int[] counts, int argb) {
+        if ((argb >>> 24) < 200) return;
+        counts[((argb >> 20) & 0xF) << 8 | ((argb >> 12) & 0xF) << 4 | ((argb >> 4) & 0xF)]++;
+    }
+
+
+    /** A fitted icon plus the background colour its edge showed before it was trimmed. */
+    static final class IconDrawable extends BitmapDrawable {
+        final int fill;
+
+        IconDrawable(android.content.res.Resources res, Bitmap bitmap, int fill) {
+            super(res, bitmap);
+            this.fill = fill;
+        }
+    }
+
+    /**
+     * Draws a fitted icon across the whole tile: the artwork centred at 92% of the tile height,
+     * with the tile itself painted in the artwork's own edge colour. Tiles are 16:9 and app icons
+     * are square; without the colour the icon read as a small square in a wide empty box.
+     */
+    static final class TileIcon extends Drawable {
+        private final IconDrawable art;
+        private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        private final Paint band = new Paint();
+        private final RectF dst = new RectF();
+
+        TileIcon(IconDrawable art) {
+            this.art = art;
+            band.setColor(art.fill);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Rect b = getBounds();
+            Bitmap bmp = art.getBitmap();
+            if (b.isEmpty() || bmp == null || bmp.isRecycled()) return;
+            // The whole icon, at 92% of the tile height. The artwork keeps its own padding and
+            // proportions; cropping that padding away made logos run into the tile's edges.
+            float scale = b.height() * 0.92f / bmp.getHeight();
+            float width = bmp.getWidth() * scale;
+            float left = b.left + (b.width() - width) / 2f;
+            float top = b.top + (b.height() - b.height() * 0.92f) / 2f;
+            canvas.drawRect(b, band);
+            dst.set(left, top, left + width, top + b.height() * 0.92f);
+            canvas.drawBitmap(bmp, null, dst, paint);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            paint.setAlpha(alpha);
+            band.setAlpha(alpha);
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter cf) {
+            paint.setColorFilter(cf);
+            band.setColorFilter(cf);
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
     }
 
     @NonNull
@@ -402,6 +518,26 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         cardLp.width = w;
         cardLp.height = h;
         card.setLayoutParams(cardLp);
+        // The icon covers the whole card; the artwork's own background is carried across the wide
+        // part by TileIcon. The 4dp inset is only for API < 21, where clipToOutline is unavailable
+        // and a full-card square would show its corners outside the rounded background.
+        View icon = v.findViewById(R.id.icon);
+        FrameLayout.LayoutParams iconLp = (FrameLayout.LayoutParams) icon.getLayoutParams();
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+            iconLp.width = w;
+            iconLp.height = h;
+            iconLp.gravity = Gravity.CENTER;
+            iconLp.topMargin = 0;
+            iconLp.bottomMargin = 0;
+        } else {
+            int iconSize = Math.max(Math.round(24 * density), h - Math.round(8 * density));
+            iconLp.width = iconSize;
+            iconLp.height = iconSize;
+            iconLp.gravity = Gravity.CENTER;
+            iconLp.topMargin = 0;
+            iconLp.bottomMargin = 0;
+        }
+        icon.setLayoutParams(iconLp);
         View name = v.findViewById(R.id.name);
         ViewGroup.MarginLayoutParams nameLp = (ViewGroup.MarginLayoutParams) name.getLayoutParams();
         nameLp.width = w;
@@ -416,12 +552,16 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.name.setText(e.label);
         h.name.setVisibility(position < dockSize ? View.INVISIBLE : View.VISIBLE);   // the dock has no labels
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
-        h.name.setAlpha(focused ? 1f : 0f);
+        float density = h.card.getResources().getDisplayMetrics().density;
+        // Grid names live under the card now, visible at rest; focus just lifts and brightens them.
+        h.name.setAlpha(focused ? 1f : NAME_ALPHA);
+        h.name.setTranslationY(focused ? density * 4f : 0f);
         h.card.setScaleX(focused ? FOCUS_SCALE : 1f);
         h.card.setScaleY(focused ? FOCUS_SCALE : 1f);
         // Banners only in the dock. In the grid they made one app a full-bleed card while its
-        // neighbours were 64dp icons, which reads as "some icons are bigger". Grid tiles are all
-        // icons at one size; the dock is all artwork.
+        // neighbours were plain icons, which read as "some icons are bigger". Grid tiles are all
+        // icons at one size; the dock is all artwork. The in-card label is gone: the name sits
+        // under the tile, so the icon can fill the card.
         if (e.banner != null && position < dockSize) {
             h.banner.setImageDrawable(e.banner);
             h.banner.setVisibility(View.VISIBLE);
@@ -430,10 +570,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         } else {
             h.banner.setImageDrawable(null);
             h.banner.setVisibility(View.GONE);
-            h.icon.setImageDrawable(e.icon);
+            h.icon.setImageDrawable(e.icon instanceof IconDrawable
+                    ? new TileIcon((IconDrawable) e.icon) : e.icon);
             h.icon.setVisibility(View.VISIBLE);
-            h.label.setText(e.label);
-            h.label.setVisibility(View.VISIBLE);
+            h.label.setVisibility(View.GONE);
         }
         h.card.setOnClickListener(v -> launch(e));
         // Long-press edits the dock: pin into the first free slot, or unpin if it is already there.
@@ -512,7 +652,14 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         Bitmap bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
         d.setBounds(0, 0, n, n);
-        d.draw(c);
+        try {
+            d.draw(c);
+        } catch (Throwable t) {
+            // Same vendor-drawable hazard as fitIcon; a missing ambient tint is not worth a crash.
+            d.setBounds(saved);
+            bmp.recycle();
+            return 0xFF444444;
+        }
         d.setBounds(saved);
         float[] hsv = new float[3];
         int best = 0xFF444444;
@@ -586,15 +733,15 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 if (reducedMotion) {
                     view.setScaleX(s);
                     view.setScaleY(s);
-                    name.setAlpha(focused ? 1f : 0f);
-                    name.setTranslationY(focused ? density * 4f : -density * 6f);
+                    name.setAlpha(focused ? 1f : NAME_ALPHA);
+                    name.setTranslationY(focused ? density * 4f : 0f);
                 } else {
                     view.animate().scaleX(s).scaleY(s)
                             .setDuration(focused ? 260 : 180)
                             .setInterpolator(new OvershootInterpolator(focused ? 1.6f : 0f))
                             .start();
-                    name.animate().alpha(focused ? 1f : 0f)
-                            .translationY(focused ? density * 4f : -density * 6f)
+                    name.animate().alpha(focused ? 1f : NAME_ALPHA)
+                            .translationY(focused ? density * 4f : 0f)
                             .setDuration(220).start();
                 }
                 int pos = getBindingAdapterPosition();

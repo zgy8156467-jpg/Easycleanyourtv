@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One picture in the local grid: a hairline so a dark photo still has an edge, and a white
+     ring on focus, which is the only selection cue a remote gets. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#33FFFFFF" />
+            <stroke android:width="2dp" android:color="#FFFFFFFF" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#1A000000" />
+            <stroke android:width="1dp" android:color="#33FFFFFF" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+</selector>

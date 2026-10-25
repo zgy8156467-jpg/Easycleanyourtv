@@ -22,6 +22,8 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- The desktop's own picture grid reads the TV's photos; requested when that grid opens. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Foreground-app lookup for the Home key takeover; the user grants it through the app-ops
          setting (adb shell appops set com.gathin.tvhome GET_USAGE_STATS allow). -->
@@ -79,6 +81,13 @@
             android:excludeFromRecents="true"
             android:screenOrientation="landscape"
             android:theme="@style/Theme.Crash" />
+
+        <!-- Shown instead of the desk on a phone; see DeviceProfile.isPhone. -->
+        <activity
+            android:name=".PhoneNoticeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Holo.NoActionBar" />
 
         <!-- Quick settings, opened by the remote's Settings (选项) button through HomeKeyService.
              Its own task and no history, so the app behind keeps running and Back returns to it. -->

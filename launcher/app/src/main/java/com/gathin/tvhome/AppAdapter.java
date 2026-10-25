@@ -10,7 +10,10 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Outline;
+import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -223,7 +226,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 banner = ri.activityInfo.loadBanner(pm);
                 if (banner == null) banner = ri.activityInfo.applicationInfo.loadBanner(pm);
             }
-            Drawable icon = ri.loadIcon(pm);
+            Drawable icon = fitIcon(ctx, ri.loadIcon(pm));
             String label = String.valueOf(ri.loadLabel(pm));
             ApplicationInfo ai = ri.activityInfo.applicationInfo;
             boolean system = ai != null
@@ -316,7 +319,69 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         Drawable banner = android.os.Build.VERSION.SDK_INT >= 20 ? ai.loadBanner(pm) : null;
         boolean system = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0
                 && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
-        return new Entry(label, comp, banner, ai.loadIcon(pm), system);
+        return new Entry(label, comp, banner, fitIcon(ctx, ai.loadIcon(pm)), system);
+    }
+
+    /**
+     * Icons arrive in whatever shape their author shipped: legacy art fills its canvas, adaptive
+     * icons carry a wide safe-zone padding, and TV apps often use 16:9 logos. Drawn straight into
+     * the tile they read as different sizes. Render each one once, crop the transparent border,
+     * then scale what is left so its longest side is exactly the icon box — same artwork, same
+     * optical size.
+     */
+    static Drawable fitIcon(Context context, Drawable d) {
+        if (d == null) return null;
+        float density = context.getResources().getDisplayMetrics().density;
+        int n = Math.max(1, Math.round(96 * density));
+        int iw = d.getIntrinsicWidth();
+        int ih = d.getIntrinsicHeight();
+        if (iw <= 0 || ih <= 0) { iw = ih = n; }
+        float fit = Math.min(n / (float) iw, n / (float) ih);
+        int dw = Math.max(1, Math.round(iw * fit));
+        int dh = Math.max(1, Math.round(ih * fit));
+        Bitmap src;
+        try {
+            src = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888);
+        } catch (OutOfMemoryError e) {
+            return d;
+        }
+        Canvas canvas = new Canvas(src);
+        d.setBounds((n - dw) / 2, (n - dh) / 2, (n - dw) / 2 + dw, (n - dh) / 2 + dh);
+        d.draw(canvas);
+
+        int[] px = new int[n * n];
+        src.getPixels(px, 0, n, 0, 0, n, n);
+        int l = n, t = n, r = -1, b = -1;
+        for (int y = 0; y < n; y++) {
+            int row = y * n;
+            for (int x = 0; x < n; x++) {
+                if ((px[row + x] >>> 24) > 16) {
+                    if (x < l) l = x;
+                    if (x > r) r = x;
+                    if (y < t) t = y;
+                    if (y > b) b = y;
+                }
+            }
+        }
+        if (r < l || b < t) {
+            src.recycle();
+            return d;
+        }
+
+        int bw = r - l + 1, bh = b - t + 1;
+        int size = Math.round(64 * density);
+        float scale = size / (float) Math.max(bw, bh);
+        int ow = Math.max(1, Math.round(bw * scale));
+        int oh = Math.max(1, Math.round(bh * scale));
+        // Centred in the same square every icon gets: a square logo fills it, a 16:9 logo is
+        // exactly as wide but shorter, instead of both being judged by their transparent margins.
+        Bitmap out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas oc = new Canvas(out);
+        oc.drawBitmap(src, new Rect(l, t, r + 1, b + 1),
+                new RectF((size - ow) / 2f, (size - oh) / 2f, (size + ow) / 2f, (size + oh) / 2f),
+                new Paint(Paint.FILTER_BITMAP_FLAG));
+        src.recycle();
+        return new BitmapDrawable(context.getResources(), out);
     }
 
     @NonNull
@@ -354,7 +419,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.name.setAlpha(focused ? 1f : 0f);
         h.card.setScaleX(focused ? FOCUS_SCALE : 1f);
         h.card.setScaleY(focused ? FOCUS_SCALE : 1f);
-        if (e.banner != null) {
+        // Banners only in the dock. In the grid they made one app a full-bleed card while its
+        // neighbours were 64dp icons, which reads as "some icons are bigger". Grid tiles are all
+        // icons at one size; the dock is all artwork.
+        if (e.banner != null && position < dockSize) {
             h.banner.setImageDrawable(e.banner);
             h.banner.setVisibility(View.VISIBLE);
             h.icon.setVisibility(View.GONE);

@@ -55,7 +55,7 @@ public class WallpaperStage extends FrameLayout {
 
     private final ImageView base = new ImageView(getContext());
     /** Weather loop, under the poster layer and above the still wallpaper. */
-    private final TextureView weatherLayer = new TextureView(getContext());
+    private final TextureView weatherLayer = new SafeTextureView(getContext());
     private MediaPlayer weatherPlayer;
     private int weatherRes;
     /** A resource that failed to prepare on this box; retrying it every weather tick only spams. */

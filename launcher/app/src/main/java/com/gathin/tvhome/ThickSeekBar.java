@@ -9,6 +9,7 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Build;
 import android.util.AttributeSet;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.SeekBar;
@@ -44,11 +45,14 @@ public final class ThickSeekBar extends SeekBar {
         super(context, attrs);
         density = getResources().getDisplayMetrics().density;
         setPadding(0, 0, 0, 0);
-        setSplitTrack(false);
+        // Lollipop and up. On KitKat the method does not exist and Dalvik throws
+        // NoSuchMethodError the moment the control centre opens (seen on 4.4 MiTV3S).
+        if (Build.VERSION.SDK_INT >= 21) setSplitTrack(false);
         setProgressDrawable(new ColorDrawable(Color.TRANSPARENT));
         setThumb(new ColorDrawable(Color.TRANSPARENT));
         setThumbOffset(0);
-        setBackground(null);
+        if (Build.VERSION.SDK_INT >= 16) setBackground(null);
+        else setBackgroundDrawable(null);
         // Without this the remote skips the sliders entirely and left/right never reach them.
         setFocusable(true);
         setFocusableInTouchMode(false);

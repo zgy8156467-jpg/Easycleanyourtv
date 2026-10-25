@@ -101,7 +101,7 @@ final class PosterTrailer {
         HandlerThread thread = new HandlerThread("trailer-player");
         thread.start();
         playerHandler = new Handler(thread.getLooper());
-        video = new TextureView(parent.getContext());
+        video = new SafeTextureView(parent.getContext());
         // No background on a TextureView: setBackgroundColor throws UnsupportedOperationException
         // on every Android version ("TextureView doesn't support displaying a background drawable"),
         // which took down MainActivity while activity_main was being inflated. The poster behind it

@@ -3,7 +3,11 @@ package com.gathin.tvhome;
 import android.content.Context;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The usage-stats foreground feed PatchWall needs, isolated so Dalvik on Android 4.x never resolves
@@ -23,7 +27,44 @@ final class UsageScan {
         }
     }
 
+    /** One app and the last time it came to the foreground. */
+    static final class Recent {
+        final String pkg;
+        final long ts;
+
+        Recent(String pkg, long ts) {
+            this.pkg = pkg;
+            this.ts = ts;
+        }
+    }
+
     private UsageScan() {
+    }
+
+    /**
+     * Distinct apps that came to the foreground since [from], newest first. Android does not let a
+     * normal launcher read other apps' live processes, so this is the honest "recently used" feed
+     * behind the control centre's running list.
+     */
+    static List<Recent> recent(Context ctx, long from, int limit) {
+        List<Recent> out = new ArrayList<>();
+        if (limit <= 0) return out;
+        Map<String, Long> latest = new HashMap<>();
+        for (Event e : foregroundEvents(ctx, from, System.currentTimeMillis())) {
+            if (e.pkg == null || e.pkg.isEmpty()) continue;
+            Long at = latest.get(e.pkg);
+            if (at == null || e.ts > at) latest.put(e.pkg, e.ts);
+        }
+        for (Map.Entry<String, Long> e : latest.entrySet()) {
+            out.add(new Recent(e.getKey(), e.getValue()));
+        }
+        Collections.sort(out, new Comparator<Recent>() {
+            @Override
+            public int compare(Recent a, Recent b) {
+                return a.ts < b.ts ? 1 : (a.ts == b.ts ? 0 : -1);
+            }
+        });
+        return out.size() > limit ? new ArrayList<>(out.subList(0, limit)) : out;
     }
 
     static List<Event> foregroundEvents(Context ctx, long from, long to) {

@@ -185,4 +185,46 @@
     <string name="phone_body">本应用只支持电视、投影仪和电视盒子。\n手机请卸载本应用，换回手机自带桌面。</string>
     <string name="phone_uninstall">卸载本应用</string>
     <string name="phone_exit">退出</string>
+
+    <string name="folder_name">文件夹</string>
+    <string name="folder_new">新建文件夹</string>
+    <string name="folder_move_in">移入文件夹</string>
+    <string name="folder_add_app">添加应用</string>
+    <string name="folder_added">已把 %1$s 放进文件夹</string>
+    <string name="folder_remove">移出文件夹</string>
+    <string name="folder_dissolve">解散文件夹</string>
+    <string name="folder_dissolved">文件夹已解散</string>
+    <string name="folder_empty">没有可以添加的应用</string>
+    <string name="app_menu_move">调整顺序</string>
+
+    <string name="dock_size_title">Dock 图标</string>
+    <plurals name="dock_size_value">
+        <item quantity="other">当前 %1$d 个</item>
+    </plurals>
+    <plurals name="dock_size_choice">
+        <item quantity="other">%1$d 个</item>
+    </plurals>
+    <string name="dock_size_trimmed">减少后，%1$d 个应用回到了桌面</string>
+
+    <string name="running_title">运行中应用与服务</string>
+    <string name="running_subtitle">最近运行 · 桌面服务</string>
+    <string name="running_recent_header">最近运行</string>
+    <string name="running_services_header">桌面服务</string>
+    <string name="running_loading">正在读取…</string>
+    <string name="running_no_recent">最近没有运行记录</string>
+    <string name="running_grant_title">允许使用情况访问</string>
+    <string name="running_grant_subtitle">用于列出最近运行的应用</string>
+    <string name="running_grant_usage">打开使用情况访问设置</string>
+    <string name="running_platform_note">安卓不向普通桌面开放其他应用的实时进程，这里列出的是系统记录的最近使用。</string>
+    <string name="running_a11y_on">已开启</string>
+    <string name="running_a11y_off">未开启</string>
+    <string name="running_service_running">运行中</string>
+    <string name="running_service_stopped">未运行</string>
+    <string name="running_api_old">此安卓版本不提供最近运行记录</string>
+    <string name="running_empty_services">没有正在运行的桌面服务</string>
+
+    <string name="clean_title">一键清理</string>
+    <string name="clean_subtitle">打开电视自带的清理</string>
+    <string name="clean_failed">这台电视没找到清理功能</string>
+
 </resources>

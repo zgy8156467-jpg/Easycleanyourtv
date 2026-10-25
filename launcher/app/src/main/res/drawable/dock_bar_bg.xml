@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The frosted band behind the dock. The gradient and rim are the ones DockDecoration drew, now
+     worn by the dock row itself so the band can shrink and grow with the slot count. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient android:angle="270" android:startColor="#2EFFFFFF" android:endColor="#0FFFFFFF" />
+            <stroke android:width="1dp" android:color="#40FFFFFF" />
+            <corners android:radius="26dp" />
+        </shape>
+    </item>
+</layer-list>

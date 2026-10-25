@@ -6,6 +6,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.URL;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -16,8 +17,9 @@ import java.util.Map;
 /**
  * Turns a poster's Bilibili video into a playable MP4.
  *
- * <p>Bilibili's {@code playurl} still hands out plain MP4s, which is why it is the only source;
- * every poster written by {@code HotPosters} already names its bvid and cid.
+ * <p>Bilibili's {@code playurl} still hands out plain MP4s, which is why it is the only source.
+ * The Bilibili app's own posters name their bvid and cid; for Tencent, iQiyi and Mango the poster
+ * names only a title, so the trailer is found by searching that title plus "预告".
  *
  * <p>Its main CDN ({@code *.edge.mountaintoys.cn}) chains to GlobalSign Root R46, which this TV's
  * certificate store does not have. The backup hosts on {@code *.bilivideo.com} chain to R3/R5 and do
@@ -75,9 +77,17 @@ final class BiliApi {
                 }
             }
 
-            // Every poster the current source writes names its video and its cid; the lookup below
-            // only runs for a sidecar written by an older build.
-            if (bvid == null || bvid.isEmpty()) return null;
+            // Only Bilibili's own list names the video. Tencent, iQiyi and Mango give a cover and a
+            // title, so the trailer is the best "show + 预告" hit by that title.
+            if (bvid == null || bvid.isEmpty()) {
+                if (poster.title.isEmpty()) return null;
+                bvid = search(poster.title);
+                if (bvid == null) {
+                    Log.i(TAG, "no search hit for " + poster.title);
+                    return null;
+                }
+                cid = 0;
+            }
             if (cid <= 0) {
                 Meta m = meta(bvid);
                 if (m != null && m.known && !m.wide) {
@@ -105,6 +115,67 @@ final class BiliApi {
             Log.w(TAG, "resolve failed: " + e);
             Errors.record("trailer", "resolve " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return null;
+        }
+    }
+
+    /** Pick the best-looking "show + 预告" result. Bilibili search needs the buvid cookies. */
+    private static String search(String show) {
+        try {
+            String keyword = URLEncoder.encode(show + " 预告", "UTF-8");
+            String json = HotPosters.biliDoc(
+                    "/x/web-interface/search/type?search_type=video&keyword=" + keyword,
+                    REFERER, HotPosters.bilibiliCookie());
+            if (json == null) return null;
+            JSONObject data = new JSONObject(json).optJSONObject("data");
+            JSONArray result = data == null ? null : data.optJSONArray("result");
+            if (result == null) return null;
+            String best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (int i = 0; i < result.length(); i++) {
+                JSONObject o = result.optJSONObject(i);
+                if (o == null) continue;
+                String bvid = o.optString("bvid", "");
+                if (bvid.isEmpty()) continue;
+                String title = o.optString("title", "").replaceAll("<[^>]+>", "");
+                int seconds = duration(o.optString("duration", ""));
+                int score = score(title, seconds);
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = bvid;
+                }
+            }
+            if (best != null) Log.i(TAG, "search " + show + " -> " + best + " (" + bestScore + ")");
+            return best;
+        } catch (Exception e) {
+            Log.w(TAG, "search " + show + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static int score(String title, int seconds) {
+        int score = 0;
+        if (title.contains("预告")) score += 100;
+        if (title.contains("片花")) score += 90;
+        if (title.contains("定档")) score += 60;
+        if (title.contains("抢先")) score += 40;
+        if (title.contains("花絮")) score += 20;
+        if (seconds >= 20 && seconds <= 300) score += 50;
+        else if (seconds > 300 && seconds <= 600) score += 10;
+        else if (seconds > 600) score -= 80;
+        else if (seconds > 0) score -= 50;
+        return score;
+    }
+
+    /** "4:56", "12:30" or "1:02:03" to seconds; 0 when unknown. */
+    private static int duration(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        String[] parts = text.split(":");
+        try {
+            int total = 0;
+            for (String p : parts) total = total * 60 + Integer.parseInt(p.trim());
+            return total;
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 

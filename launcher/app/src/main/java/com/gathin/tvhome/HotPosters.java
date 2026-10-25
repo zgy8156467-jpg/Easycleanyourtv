@@ -27,19 +27,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * The "hot" artwork behind video apps: six posters, refreshed once a day.
+ * The "hot" artwork behind each video app: six real posters per platform, refreshed once a day.
  *
- * <p>One source for every app, so a new video app needs no work here. Bilibili's drama and film
- * rankings carry the cover, the title and the playable video in the same response, which also makes
- * the 16:9 rule free: an entry is known-good before its picture is downloaded. The per-platform
- * scrapers this class used to carry are gone; they only ever produced a picture whose trailer then
- * had to be guessed by title.
+ * <p>Every source is independent. One endpoint changing shape or timing out leaves that platform's
+ * old files in place and does not touch the others. Tencent, iQiyi, Mango, Youku and CCTV name only
+ * a cover and a title; Bilibili's ranking also names the playable video. Trailers for the others are
+ * found by searching Bilibili for the title (see {@link BiliApi}), each platform's own list stays
+ * its own, so two installed apps do not show the same six shows.
  *
  * <p>Pictures replace the old ones only after landing as a valid JPEG. Each picture has a sidecar
- * {@code N.json} holding the title and the Bilibili video that its trailer comes from. They are
- * written together: no metadata, no picture.
+ * {@code N.json} holding the show's title and, when known, the Bilibili video that its trailer comes
+ * from. They are written together: no metadata, no picture.
  */
 final class HotPosters {
 
@@ -48,15 +50,20 @@ final class HotPosters {
     private static final int PER_SOURCE = 6;
     private static final int TIMEOUT = 12000;
     private static final long MAX_IMAGE_BYTES = 3L * 1024 * 1024;
-    private static final long MAX_DOC_BYTES = 2L * 1024 * 1024;
+    /** iQiyi's channel payload is ~2.5 MB uncompressed; the old 2 MB cap silently dropped it. */
+    private static final long MAX_DOC_BYTES = 8L * 1024 * 1024;
     private static final long RETRY_MS = 6L * 60 * 60 * 1000;
     static final String UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
 
-    /** Ranking partitions: drama and film. */
-    private static final int RANK_DRAMA = 11;
-    private static final int RANK_FILM = 23;
-    private static final String RANK_REFER = "https://www.bilibili.com/v/popular/rank/all";
+    private static final Pattern TENCENT_IMAGE =
+            Pattern.compile("https://tv\\.puui\\.qpic\\.cn/[^\"'\\\\<>\\s]+?_pic_1920x800/[^\"'\\\\<>\\s]+");
+    private static final Pattern TENCENT_COVER = Pattern.compile("coverPic:\\\"([^\\\"]+)\\\"");
+    private static final Pattern TENCENT_TITLE = Pattern.compile("title:\\\"([^\\\"]*)\\\"");
+    /** Most focusList entries leave {@code title} empty and name themselves further down. */
+    private static final Pattern TENCENT_ENTRY_TITLE =
+            Pattern.compile("(?:mzTitle|sourceTitle):\\\"([^\\\"]+)\\\"");
+    private static final Pattern THUMBNAIL = Pattern.compile("thumbnail/\\d+x");
 
     /** One poster on disk plus what the desk needs to label and animate it. */
     static final class Poster {
@@ -104,19 +111,6 @@ final class HotPosters {
         this.prefs = this.ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    /** Every video app draws from the same set: no per-app source to adapt. */
-    private static final String SOURCE = "hot";
-
-    /** The app's own name is the reliable signal on Chinese TVs; package names are only a backup. */
-    private static final String[] LABEL_WORDS = {"视频", "影视", "电影", "影院", "剧场", "播放", "直播",
-            "电视", "卫视", "剧集", "芒果", "爱奇艺", "优酷", "哔哩", "B站", "咪咕", "云视听", "极光",
-            "南瓜", "电视猫", "泰捷", "当贝影视"};
-    private static final String[] PACKAGE_WORDS = {"video", "movie", "vod"};
-    /** Shells that happen to carry a convenient word in their package name. */
-    private static final String[] SYSTEM_WORDS = {"launcher", "settings", "home", "wallpaper",
-            "screensaver", "store", "market", "inputmethod", "systemui", "permission", "installer",
-            "projection", "gallery"};
-
     private static Context app;
     private static final Map<String, String> labels = new HashMap<>();
 
@@ -124,20 +118,31 @@ final class HotPosters {
         app = context.getApplicationContext();
     }
 
-    /** {@link #SOURCE} for apps that play video, null for everything else. */
+    /**
+     * Which poster source belongs to this package, or null when the app has none. The exact TV
+     * packages come first; the name check catches vendor variants (极光/奇异果/云视听…).
+     */
     static String sourceFor(String pkg) {
         if (pkg == null || pkg.isEmpty() || pkg.equals(BuildConfig.APPLICATION_ID)) return null;
-        String name = pkg.toLowerCase(Locale.ROOT);
-        for (String word : SYSTEM_WORDS) {
-            if (name.contains(word)) return null;
+        switch (pkg) {
+            case "com.ktcp.video":
+                return "tencent";
+            case "com.gitvdemo.video":
+                return "iqiyi";
+            case "com.xiaodianshi.tv.yst":
+                return "bilibili";
+            case "com.hunantv.license":
+                return "mango";
+            default:
+                break;
         }
         String label = label(pkg);
-        for (String word : LABEL_WORDS) {
-            if (label.contains(word)) return SOURCE;
-        }
-        for (String word : PACKAGE_WORDS) {
-            if (name.contains(word)) return SOURCE;
-        }
+        if (label.contains("极光") || label.contains("腾讯")) return "tencent";
+        if (label.contains("奇异果") || label.contains("爱奇艺")) return "iqiyi";
+        if (label.contains("芒果")) return "mango";
+        if (label.contains("哔哩") || label.contains("B站") || label.contains("小电视")) return "bilibili";
+        if (label.contains("酷喵") || label.contains("优酷")) return "youku";
+        if (label.contains("央视频") || label.contains("央视影音")) return "yangshipin";
         return null;
     }
 
@@ -296,8 +301,30 @@ final class HotPosters {
     }
 
     private boolean fetch(String source) {
-        cleanupOldSources();
-        List<Seed> seeds = hot();
+        cleanupSingleSource();
+        List<Seed> seeds;
+        switch (source) {
+            case "iqiyi":
+                seeds = iqiyi();
+                break;
+            case "mango":
+                seeds = mango();
+                break;
+            case "bilibili":
+                seeds = bilibili();
+                break;
+            case "tencent":
+                seeds = tencent();
+                break;
+            case "youku":
+                seeds = youku();
+                break;
+            case "yangshipin":
+                seeds = yangshipin();
+                break;
+            default:
+                return false;
+        }
         if (seeds.isEmpty()) {
             Log.w(TAG, source + ": no poster URLs");
             return false;
@@ -362,54 +389,273 @@ final class HotPosters {
 
     // ---- sources ---------------------------------------------------------------------------------
 
-    /** Drama and film rankings, interleaved, portrait entries dropped before any download. */
-    private List<Seed> hot() {
-        List<Seed> drama = ranking(RANK_DRAMA);
-        List<Seed> film = ranking(RANK_FILM);
+    /** iQiyi's channel pages carry wide 2260x744 banners; the old pcw imageUrl is a 120x160 thumb. */
+    private List<Seed> iqiyi() {
+        String[] channels = {"tv", "variety", "cartoon"};
         List<Seed> out = new ArrayList<>();
-        for (int i = 0; i < Math.max(drama.size(), film.size()); i++) {
-            if (i < drama.size()) out.add(drama.get(i));
-            if (i < film.size()) out.add(film.get(i));
+        for (String ch : channels) {
+            if (out.size() >= PER_SOURCE) break;
+            String json = readDoc("https://mesh.if.iqiyi.com/portal/lw/v7/channel/" + ch
+                    + "?channel_id=2", "https://www.iqiyi.com/");
+            if (json == null) continue;
+            try {
+                collectIqiyi(new JSONObject(json), out);
+            } catch (Exception e) {
+                Log.w(TAG, "iqiyi " + ch + " parse: " + e.getMessage());
+            }
+        }
+        return first(out, PER_SOURCE * 2);
+    }
+
+    /** Mango's horizontal still is imgUrlH; older entries only have the square img. */
+    private List<Seed> mango() {
+        List<Seed> out = new ArrayList<>();
+        for (int channel : new int[]{1, 2, 3}) {
+            if (out.size() >= PER_SOURCE) break;
+            String json = readDoc("https://pianku.api.mgtv.com/rider/list/pcweb/v3?allowedRC=1&channelId="
+                    + channel + "&pn=1&pc=6&platform=pcweb&_support=10000000", "https://www.mgtv.com/");
+            if (json == null) continue;
+            try {
+                JSONArray docs = new JSONObject(json).getJSONObject("data").getJSONArray("hitDocs");
+                for (int i = 0; i < docs.length(); i++) {
+                    JSONObject o = docs.getJSONObject(i);
+                    String u = o.optString("imgUrlH", "");
+                    if (u.isEmpty()) u = o.optString("img", "");
+                    addSeed(out, u, o.optString("title", ""), "", 0);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "mango " + channel + " parse: " + e.getMessage());
+            }
         }
         return first(out, PER_SOURCE * 2);
     }
 
     /**
-     * One Bilibili ranking partition. Each item already carries the cover, the title and the video
-     * that will play behind it, so there is nothing to match by hand and nothing to adapt per app.
+     * Bilibili answers a cookieless app with code -352 (risk control). The fingerprint endpoint
+     * hands out a buvid pair without any auth; once those are sent as cookies the ranking API works.
+     * If it still refuses, the public ranking HTML has the same cover art.
+     *
+     * <p>This is the Bilibili app's own list. Each entry already names the video that plays behind
+     * it, so no search is needed. Portrait stills are dropped: the poster area is 16:9.
      */
-    private List<Seed> ranking(int rid) {
+    private List<Seed> bilibili() {
         List<Seed> out = new ArrayList<>();
-        String json = biliDoc("/x/web-interface/ranking/v2?rid=" + rid + "&type=all",
-                RANK_REFER, bilibiliCookie());
-        if (json == null) return out;
-        try {
-            JSONArray list = new JSONObject(json).getJSONObject("data").getJSONArray("list");
-            for (int i = 0; i < list.length(); i++) {
-                JSONObject o = list.getJSONObject(i);
-                JSONObject dim = o.optJSONObject("dimension");
-                if (dim != null && !Aspect.wide(dim.optInt("width", 0),
-                        dim.optInt("height", 0), dim.optInt("rotate", 0))) continue;
-                addSeed(out, o.optString("pic", ""), o.optString("title", ""),
-                        o.optString("bvid", ""), o.optLong("cid", 0));
+        String cookie = bilibiliCookie();
+        String json = biliDoc("/x/web-interface/ranking/v2?rid=0&type=all",
+                "https://www.bilibili.com/v/popular/rank/all", cookie);
+        if (json != null) {
+            try {
+                JSONArray list = new JSONObject(json).getJSONObject("data").getJSONArray("list");
+                for (int i = 0; i < list.length() && out.size() < PER_SOURCE; i++) {
+                    JSONObject o = list.getJSONObject(i);
+                    JSONObject dim = o.optJSONObject("dimension");
+                    if (dim != null && !Aspect.wide(dim.optInt("width", 0),
+                            dim.optInt("height", 0), dim.optInt("rotate", 0))) continue;
+                    addSeed(out, o.optString("pic", ""), o.optString("title", ""),
+                            o.optString("bvid", ""), o.optLong("cid", 0));
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "bilibili parse: " + e.getMessage()
+                        + " body=" + json.substring(0, Math.min(200, json.length())));
             }
-        } catch (Exception e) {
-            Log.w(TAG, "ranking " + rid + ": " + e.getMessage());
         }
-        return out;
+        if (out.isEmpty()) {
+            String html = readDoc("https://www.bilibili.com/v/popular/rank/all",
+                    "https://www.bilibili.com/", cookie);
+            if (html != null) {
+                Matcher m = Pattern.compile(
+                        "(?:https?:)?//i[0-9]\\.hdslb\\.com/bfs/archive/[^\"'\\\\<>\\s]+?\\.(?:jpg|png|webp)")
+                        .matcher(html);
+                while (m.find() && out.size() < PER_SOURCE * 2) addSeed(out, m.group(), "", "", 0);
+            }
+        }
+        return first(out, PER_SOURCE);
     }
 
-    /** The four per-platform folders from before the single-source change; nothing reads them now. */
-    private void cleanupOldSources() {
-        if (prefs.getInt("one1", 0) != 0) return;
-        for (String old : new String[]{"tencent", "iqiyi", "bilibili", "mango"}) {
-            File[] files = dir(old).listFiles();
-            if (files != null) {
-                for (File f : files) f.delete();
+    /**
+     * Tencent's channel pages embed their focus carousel as a JS object literal. Each entry carries
+     * {@code title:"…"} a few hundred characters before its {@code coverPic:"…"}.
+     */
+    private List<Seed> tencent() {
+        List<Seed> out = new ArrayList<>();
+        for (String path : new String[]{"tv", "movie"}) {
+            if (out.size() >= PER_SOURCE) break;
+            String html = readDoc("https://v.qq.com/channel/" + path, "https://v.qq.com/");
+            if (html == null) continue;
+            int before = out.size();
+            Matcher m = TENCENT_COVER.matcher(html);
+            while (m.find() && out.size() < PER_SOURCE * 2) {
+                String title = nearestTitle(html, m.start());
+                if (title == null || title.isEmpty()) {
+                    // Only the first entry has title:"…" before its coverPic; the rest are named in
+                    // mzTitle/sourceTitle that follow it, inside the same object literal.
+                    int end = html.indexOf("{id:\"", m.end());
+                    if (end < 0) end = Math.min(html.length(), m.end() + 3000);
+                    title = entryTitle(html.substring(m.end(), Math.max(m.end(), end)));
+                }
+                // A still with no name anywhere would rotate in untitled and with no clip to search
+                // for; skip it and keep looking for a titled one.
+                if (title == null || title.isEmpty()) continue;
+                addSeed(out, m.group(1), title, "", 0);
             }
-            dir(old).delete();
+            if (out.size() > before) continue;
+            // Older pages have no focusList; the plain 1920x800 stills still work, just untitled.
+            Matcher legacy = TENCENT_IMAGE.matcher(html);
+            while (legacy.find() && out.size() < PER_SOURCE * 2) {
+                String u = legacy.group()
+                        .replace("&amp;amp;", "&")
+                        .replace("&amp;", "&");
+                int cut = u.indexOf("&quot;");
+                if (cut >= 0) u = u.substring(0, cut);
+                cut = u.indexOf(");");
+                if (cut >= 0) u = u.substring(0, cut);
+                u = THUMBNAIL.matcher(u).replaceFirst("thumbnail/1280x");
+                addSeed(out, u, "", "", 0);
+            }
         }
-        prefs.edit().putInt("one1", 1).apply();
+        return first(out, PER_SOURCE);
+    }
+
+    /** The last title:"…" before a coverPic belongs to the same focusList entry. */
+    private static String nearestTitle(String html, int coverAt) {
+        int from = Math.max(0, coverAt - 700);
+        Matcher t = TENCENT_TITLE.matcher(html.substring(from, coverAt));
+        String title = null;
+        while (t.find()) title = t.group(1);
+        return title;
+    }
+
+    /** The first mzTitle/sourceTitle in an entry's tail. */
+    private static String entryTitle(String tail) {
+        Matcher t = TENCENT_ENTRY_TITLE.matcher(tail);
+        return t.find() ? t.group(1) : null;
+    }
+
+    /**
+     * Youku's home page ships its whole feed as {@code window.__INITIAL_DATA__} in the HTML. The
+     * top carousel ("LUNBO") is the editorial pick; {@code hImg} is the 1920x1080 still, while
+     * {@code img} is the portrait cover, so hImg is preferred. The literal is JavaScript, not JSON:
+     * only {@code undefined} has to be rewritten before org.json will take it.
+     */
+    private List<Seed> youku() {
+        List<Seed> out = new ArrayList<>();
+        String html = readDoc("https://www.youku.com/channelweb/tv", "https://www.youku.com/");
+        if (html == null) return out;
+        JSONObject root = initialData(html);
+        JSONArray modules = root == null ? null : root.optJSONArray("moduleList");
+        if (modules == null) return out;
+        for (int i = 0; i < modules.length(); i++) {
+            JSONObject mod = modules.optJSONObject(i);
+            if (mod == null || !mod.optString("typeName", "").contains("LUNBO")) continue;
+            JSONArray comps = mod.optJSONArray("components");
+            if (comps == null) continue;
+            for (int c = 0; c < comps.length(); c++) {
+                JSONObject comp = comps.optJSONObject(c);
+                JSONArray items = comp == null ? null : comp.optJSONArray("itemList");
+                if (items == null) continue;
+                for (int k = 0; k < items.length() && out.size() < PER_SOURCE * 2; k++) {
+                    JSONObject o = items.optJSONObject(k);
+                    if (o == null) continue;
+                    String u = o.optString("hImg", "");
+                    if (u.isEmpty()) u = o.optString("img", "");
+                    addSeed(out, u, o.optString("title", ""), "", 0);
+                }
+            }
+            break;
+        }
+        return first(out, PER_SOURCE * 2);
+    }
+
+    /** The {@code window.__INITIAL_DATA__} literal, with its JavaScript {@code undefined}s folded. */
+    private static JSONObject initialData(String html) {
+        int at = html.indexOf("window.__INITIAL_DATA__");
+        int start = at < 0 ? -1 : html.indexOf('{', at);
+        int end = start < 0 ? -1 : html.indexOf("</script>", start);
+        if (start < 0 || end < 0) return null;
+        String json = html.substring(start, end).trim();
+        if (json.endsWith(";")) json = json.substring(0, json.length() - 1);
+        json = json.replace(":undefined", ":null")
+                .replace(",undefined", ",null")
+                .replace("[undefined", "[null");
+        try {
+            return new JSONObject(json);
+        } catch (Exception e) {
+            Log.w(TAG, "youku state: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 央视频's mobile home page is plain JSON; its carousel is eight 1920x1080 banners with a promo
+     * line each. One entry has a blank title and no usable name, so it is left out later.
+     */
+    private List<Seed> yangshipin() {
+        List<Seed> out = new ArrayList<>();
+        String json = readDoc("https://capi.yangshipin.cn/api/oms/m/page/PG00000001.json",
+                "https://m.yangshipin.cn/");
+        if (json == null) return out;
+        try {
+            JSONObject data = new JSONObject(json).optJSONObject("data");
+            JSONArray mods = data == null ? null : data.optJSONArray("feedModuleList");
+            if (mods == null) return out;
+            for (int i = 0; i < mods.length(); i++) {
+                JSONObject m = mods.optJSONObject(i);
+                if (m == null || !"carousel".equals(m.optString("moduleType", ""))) continue;
+                JSONArray items = m.optJSONArray("dataList");
+                if (items == null) continue;
+                for (int k = 0; k < items.length() && out.size() < PER_SOURCE * 2; k++) {
+                    JSONObject o = items.optJSONObject(k);
+                    if (o == null) continue;
+                    addSeed(out, o.optString("coverUrl", ""), o.optString("title", ""), "", 0);
+                }
+                break;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "yangshipin: " + e.getMessage());
+        }
+        return first(out, PER_SOURCE * 2);
+    }
+
+    /** Depth-first search: the shape of these responses changes, the key name does not. */
+    private static void collectIqiyi(JSONObject o, List<Seed> out) {
+        String url = o.optString("banner_image_url", "");
+        if (!url.isEmpty()) {
+            String title = firstNonEmpty(o, "title", "display_name", "name", "subtitle");
+            addSeed(out, url, title, "", 0);
+        }
+        java.util.Iterator<String> it = o.keys();
+        while (it.hasNext()) {
+            Object v = o.opt(it.next());
+            if (v instanceof JSONObject) collectIqiyi((JSONObject) v, out);
+            else if (v instanceof JSONArray) collectIqiyi((JSONArray) v, out);
+        }
+    }
+
+    private static void collectIqiyi(JSONArray a, List<Seed> out) {
+        for (int i = 0; i < a.length(); i++) {
+            Object v = a.opt(i);
+            if (v instanceof JSONObject) collectIqiyi((JSONObject) v, out);
+            else if (v instanceof JSONArray) collectIqiyi((JSONArray) v, out);
+        }
+    }
+
+    private static String firstNonEmpty(JSONObject o, String... keys) {
+        for (String k : keys) {
+            String v = o.optString(k, "");
+            if (!v.isEmpty()) return v;
+        }
+        return "";
+    }
+
+    /** 2.0.15's single shared folder; every per-app source is back, so it is dead weight. */
+    private void cleanupSingleSource() {
+        if (prefs.getInt("one2", 0) != 0) return;
+        File[] files = dir("hot").listFiles();
+        if (files != null) {
+            for (File f : files) f.delete();
+        }
+        dir("hot").delete();
+        prefs.edit().putInt("one2", 1).apply();
     }
 
     /** Cached for an hour: the fingerprint endpoint is cheap but not free. */
@@ -444,6 +690,11 @@ final class HotPosters {
         if (url.startsWith("//")) url = "https:" + url;
         if (url.startsWith("http://")) url = "https://" + url.substring(7);
         if (!url.startsWith("https://")) return null;
+        // iQiyi now hands out AVIF, which Android 6 cannot decode. Their CDN serves the same
+        // picture as JPEG when the extension asks for it.
+        if (url.endsWith(".avif") && url.contains("iqiyipic.com")) {
+            url = url.substring(0, url.length() - 5) + ".jpg";
+        }
         return url;
     }
 
@@ -533,6 +784,14 @@ final class HotPosters {
             c.setInstanceFollowRedirects(true);
             c.setRequestProperty("User-Agent", UA);
             c.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9");
+            // These CDNs answer 403 to a bare request from a TV.
+            String host = new URL(url).getHost();
+            if (host.contains("qpic.cn")) c.setRequestProperty("Referer", "https://v.qq.com/");
+            else if (host.contains("iqiyi")) c.setRequestProperty("Referer", "https://www.iqiyi.com/");
+            else if (host.contains("ykimg") || host.contains("alicdn"))
+                c.setRequestProperty("Referer", "https://www.youku.com/");
+            else if (host.contains("yangshipin"))
+                c.setRequestProperty("Referer", "https://m.yangshipin.cn/");
             int code = c.getResponseCode();
             if (code / 100 != 2) {
                 Log.w(TAG, "http " + code + " " + url);

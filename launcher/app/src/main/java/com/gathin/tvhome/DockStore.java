@@ -18,14 +18,42 @@ final class DockStore {
 
     private static final String PREFS = "dock";
     private static final String KEY_APPS = "apps";
+    private static final String KEY_SIZE = "size";
+    static final int MIN_SIZE = 1;
+    static final int MAX_SIZE = 8;
 
     private final SharedPreferences prefs;
     /** config.xml defaults, optionally already overridden by config.json. */
     private final List<String> base;
+    /** Slots to draw when the user has never resized the dock (the grid's column count). */
+    private final int defaultSize;
 
-    DockStore(Context ctx, List<String> configuredDefaults) {
+    DockStore(Context ctx, List<String> configuredDefaults, int defaultSize) {
         this.prefs = ctx.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         this.base = new ArrayList<>(configuredDefaults);
+        this.defaultSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, defaultSize));
+    }
+
+    /** How many slots the dock draws. Resizable from the control centre. */
+    int capacity() {
+        int n = prefs.getInt(KEY_SIZE, defaultSize);
+        return Math.max(MIN_SIZE, Math.min(MAX_SIZE, n));
+    }
+
+    /**
+     * Resize the dock. Shrinking unpins the overflow (those apps return to the grid) so the dock
+     * never keeps entries it cannot draw.
+     *
+     * @return how many apps were pushed back to the grid
+     */
+    int setCapacity(int size) {
+        int n = Math.max(MIN_SIZE, Math.min(MAX_SIZE, size));
+        prefs.edit().putInt(KEY_SIZE, n).apply();
+        List<String> list = apps();
+        if (list.size() <= n) return 0;
+        int removed = list.size() - n;
+        set(new ArrayList<>(list.subList(0, n)));
+        return removed;
     }
 
     /** Pinned package names in dock order. Never null. */

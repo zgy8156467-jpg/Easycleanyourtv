@@ -4,6 +4,8 @@ import android.Manifest;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.ActivityManager;
+import android.app.AppOpsManager;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
@@ -12,6 +14,7 @@ import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
@@ -45,9 +48,11 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.text.format.DateUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -103,7 +108,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     /** The picture behind the desk: default wallpaper plus the focused app's hot posters. */
     private WallpaperStage stage;
     /** Draws the band behind the dock row; kept so its colour can follow the wallpaper. */
-    private DockDecoration dockDecoration;
     private static final int REQ_PICK_WALLPAPER = 41;
     private static final int REQ_UNINSTALL = 42;
     private static final int REQ_INSTALL_STORAGE = 43;
@@ -186,6 +190,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private TextView emptyHint;
     /** The "Favourites" panel, so Back can close it. */
     private PopupWindow dockPicker;
+    /** The dock slot-count chooser opened from the control centre. */
+    private PopupWindow dockSizePicker;
+    /** A folder's panel and the folder it is showing, so edits can reopen the refreshed list. */
+    private PopupWindow folderPanel;
+    private FolderStore.Folder openFolder;
+    /** Folder choice / add-app pickers, so a second tap replaces rather than stacks them. */
+    private PopupWindow folderPick;
     private SpringAnimation springX, springY;
     private float glassTargetX, glassTargetY;
     private boolean glassShown;
@@ -199,6 +210,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     // Static so they survive the activity being destroyed while another app is open (low-memory TVs,
     // or Developer options → "Don't keep activities"); they only reset when the process dies.
     private static int lastFocused = 0;
+    /** Dock slot focus last sat on; the grid remembers it across a trip into an app. */
+    private static int lastDockIndex = 0;
     /** App of the last focused tile, so focus follows it when the app list changes. */
     private static String lastFocusedKey;
     /** Long-press on a dock tile: left/right reorder, OK removes, Back finishes. */
@@ -321,7 +334,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             public boolean requestChildRectangleOnScreen(@NonNull RecyclerView parent, @NonNull View child,
                                                          @NonNull Rect rect, boolean immediate,
                                                          boolean focusedChildVisible) {
-                if (getPosition(child) < COLUMNS) return false;
+                if (getPosition(child) == 0) return false;
                 int top = child.getTop() + rect.top;
                 int bottom = top + rect.height();
                 int limitBottom = getHeight() - getPaddingBottom();
@@ -335,10 +348,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 return true;
             }
         });
+        // Position 0 is the dock, one full-width row, so its slot count can differ from COLUMNS.
+        ((GridLayoutManager) grid.getLayoutManager()).setSpanSizeLookup(
+                new GridLayoutManager.SpanSizeLookup() {
+                    @Override
+                    public int getSpanSize(int position) {
+                        return position == 0 ? COLUMNS : 1;
+                    }
+                });
         grid.setHasFixedSize(true);
         grid.setItemAnimator(null);
-        dockDecoration = new DockDecoration(COLUMNS, density, wallpaperPresent());
-        grid.addItemDecoration(dockDecoration);
         grid.setLayoutAnimation(new LayoutAnimationController(
                 AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
         reducedMotion = getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
@@ -349,23 +368,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
         // tvOS layout: push the dock row to the bottom of the screen; the grid hides below until you press Down.
         grid.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            int h = b - t;
-            // The item height follows the tile, and the tile follows the column count, so this cannot be
-            // a constant: at six columns the tiles are smaller and the dock row sits lower.
-            int inner = (r - l) - grid.getPaddingLeft() - grid.getPaddingRight();
-            int tile = AppAdapter.tileWidthPx(inner, COLUMNS, density);
-            int dockRow = AppAdapter.itemHeightPx(AppAdapter.tileHeightPx(tile), density)
-                    + (int) ((6 + 12) * density);   // item height plus DockDecoration offsets
-            // 6dp, not the old 30: the glass band is drawn 14dp beyond the cards and the row already
-            // carries 12dp of bottom offset plus 8dp of item padding, so this puts the band's bottom
-            // edge exactly on the screen edge instead of floating it 36dp up.
-            int want = Math.max(0, h - dockRow - (int) (6 * density));
-            if (grid.getPaddingTop() != want) {
-                grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
-                // The padding moves the dock row without scrolling, so the scroll listener never sees
-                // it; on a cold start that leaves the glass above the tile until the next key press.
-                // The rows only reach their new place on the next layout pass, so reseat from there.
-                reseatPending = true;
+            updateDockPadding();
+            // The dock's first bind can land before this width exists; re-size it once it does.
+            if (adapter != null && adapter.dockWidthStale(r - l)) {
+                RecyclerView.ViewHolder dockVh = grid.findViewHolderForAdapterPosition(0);
+                if (dockVh != null) {
+                    adapter.resizeDockRow(dockVh.itemView);
+                    reseatPending = true;
+                }
             }
         });
         grid.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
@@ -427,8 +437,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                // Back to the dock tile Up came from, not wherever the focus finder happens to land.
-                focusTile(lastFocused % COLUMNS);
+                // Back to the dock slot Up came from, not wherever the focus finder happens to land.
+                focusDock(lastDockIndex);
                 return true;
             }
             // Left and right walk between the two pills; their next-focus attributes keep the
@@ -525,7 +535,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         ambient.setAlpha(0f);
         // Read these before reload(): rebinding can move focus to the first tile and overwrite them.
         final String returnKey = lastFocusedKey;
-        final int returnSlot = lastFocused;
+        final int returnSlot = lastFocused == 0 ? lastDockIndex : lastFocused;
         // The adapter was let go of when memory ran short: put it back before loading the tiles again.
         if (grid.getAdapter() == null) grid.setAdapter(adapter);
         if (wallpaperReleased) {
@@ -542,8 +552,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // Return to the app we left from, or the same slot if that app is gone. Always refocus: after
         // reload() the view that holds focus may no longer show the app it had.
         grid.post(() -> {
-            int pos = adapter.positionOf(returnKey);
-            focusTile(pos >= 0 ? pos : returnSlot);
+            int pos = returnKey == null ? -1 : adapter.positionOf(returnKey);
+            if (pos >= 0) focusTile(pos);
+            else focusDock(returnSlot);
         });
 
         // Runs on every resume as well: coming back from the accessibility page clears the nag.
@@ -625,6 +636,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             appMenu.dismiss();
             return;
         }
+        if (folderPanel != null && folderPanel.isShowing()) {
+            folderPanel.dismiss();
+            return;
+        }
         if (controlPanel != null && controlPanel.isShowing()) {
             controlPanel.dismiss();
             return;
@@ -641,7 +656,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             return;
         }
         if (isInProgramBar(getCurrentFocus())) {
-            focusTile(lastFocused % COLUMNS);
+            focusDock(lastDockIndex);
             return;
         }
         // Home screen: Back goes nowhere.
@@ -739,9 +754,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     /** Back to the first tile, the way the Home button behaves on a phone launcher. */
     private void scrollToTop() {
-        if (adapter == null || adapter.getItemCount() == 0) return;
+        if (adapter == null) return;
         lastFocused = 0;
-        lastFocusedKey = adapter.keyAt(0);
+        lastDockIndex = 0;
+        lastFocusedKey = dockKey(0);
         // Take the glass off first. The tile it is glued to is about to be moved to another row, and
         // measuring it in between left the highlight sitting in the top-left corner of the screen.
         hideGlass();
@@ -751,14 +767,56 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // focus is how the highlight ended up nowhere at all.
         grid.post(() -> {
             RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(0);
-            if (vh == null) {
-                focusTile(0);           // not laid out yet: focusTile waits for the scroll to settle
+            View card = dockCardAt(vh, 0);
+            if (card == null) {
+                focusDock(0);           // not laid out yet: focusDock waits for the scroll to settle
                 return;
             }
-            View card = vh.itemView.findViewById(R.id.card);
-            onTileFocused(0, card);    // already focused: no focus event will fire, so place it by hand
+            onDockFocused(0, adapter.dockEntryAt(0), card);   // already focused: no event fires
             card.requestFocus();
         });
+    }
+
+    /** Stable key of the app in a dock slot, or null for an empty slot. */
+    private String dockKey(int index) {
+        AppAdapter.Entry e = adapter == null ? null : adapter.dockEntryAt(index);
+        return e == null ? null : e.component.flattenToShortString();
+    }
+
+    private View dockCardAt(RecyclerView.ViewHolder dockRow, int index) {
+        if (dockRow == null) return null;
+        View row = dockRow.itemView.findViewById(R.id.dockRow);
+        if (!(row instanceof ViewGroup)) return null;
+        ViewGroup slots = (ViewGroup) row;
+        if (index < 0 || index >= slots.getChildCount()) return null;
+        return slots.getChildAt(index).findViewById(R.id.card);
+    }
+
+    /** Put focus back on a dock slot, laying the row out first when it is not on screen. */
+    private void focusDock(int index) {
+        if (adapter == null) return;
+        final int at = Math.max(0, Math.min(index, adapter.dockSize() - 1));
+        View card = dockCardAt(grid.findViewHolderForAdapterPosition(0), at);
+        if (card != null) {
+            if (card.isFocused()) onDockFocused(at, adapter.dockEntryAt(at), card);
+            else card.requestFocus();
+            return;
+        }
+        grid.scrollToPosition(0);
+        waitForDock(at, 0);
+    }
+
+    private void waitForDock(final int index, final int attempt) {
+        if (isFinishing() || (Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+        View card = dockCardAt(grid.findViewHolderForAdapterPosition(0), index);
+        if (card != null) {
+            if (card.isFocused()) onDockFocused(index, adapter.dockEntryAt(index), card);
+            else card.requestFocus();
+            return;
+        }
+        if (attempt < 40) {
+            grid.postDelayed(() -> waitForDock(index, attempt + 1), 50);
+        }
     }
 
     /**
@@ -852,21 +910,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     // ---- editing the dock -----------------------------------------------------------------------
 
     /**
-     * Long-press a tile: on the dock it starts the rearrange mode (left/right moves, OK takes the
-     * app off the dock, Back finishes), anywhere else it opens the pin/uninstall menu.
+     * Long-press a tile. A dock tile opens the same menu as any other, with "rearrange" added, so
+     * uninstalling from the dock lives in the place the user already knows.
      */
     @Override
     public void onTileLongPressed(AppAdapter.Entry entry, boolean alreadyPinned) {
-        int position = adapter.positionOf(entry.component.flattenToShortString());
-        if (alreadyPinned && position >= 0 && position < adapter.dockSize()) {
-            dockEditing = true;
-            dockEditIndex = position;
-            dockEditKey = entry.component.flattenToShortString();
-            dockEditSwallowCenter = true;
-            toast(getString(R.string.dock_edit_hint));
-            return;
-        }
-        showAppMenu(entry, alreadyPinned);
+        showAppMenu(entry, alreadyPinned, adapter.dockIndexOf(entry.pkg));
+    }
+
+    /** Left/right rearrange mode for one dock slot; OK takes the app off, Back finishes. */
+    private void startDockEdit(int index, AppAdapter.Entry entry) {
+        dockEditing = true;
+        dockEditIndex = index;
+        dockEditKey = entry.component.flattenToShortString();
+        dockEditSwallowCenter = true;
+        toast(getString(R.string.dock_edit_hint));
     }
 
     /** Move the dock app being edited one slot left or right, and keep focus on it. */
@@ -881,21 +939,62 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         refreshDock();
     }
 
-    /** OK while rearranging: take the app off the dock and let focus follow it into the grid. */
+    /** OK while rearranging: take the app off the dock and let it return to the grid. */
     private void removeDockEntry() {
         List<String> apps = new ArrayList<>(adapter.dock().apps());
         if (dockEditIndex < 0 || dockEditIndex >= apps.size()) {
             stopDockEdit();
             return;
         }
-        String label = adapter.labelAt(dockEditIndex);
+        AppAdapter.Entry entry = adapter.dockEntryAt(dockEditIndex);
+        String label = entry == null ? "" : entry.label;
         String key = dockEditKey;
         apps.remove(dockEditIndex);
         adapter.dock().set(apps);
         lastFocusedKey = key;
+        lastDockIndex = Math.max(0, Math.min(dockEditIndex, adapter.dockSize() - 1));
         stopDockEdit();
         refreshDock();
         toast(getString(R.string.dock_removed, label));
+    }
+
+    /**
+     * Park the dock on the bottom edge. The row height follows the slot count, so this runs again
+     * whenever that count changes, not only when the grid's own bounds do.
+     */
+    private void updateDockPadding() {
+        if (grid == null || adapter == null) return;
+        int h = grid.getHeight();
+        int screen = grid.getWidth();
+        if (h <= 0 || screen <= 0) return;
+        // Measured beats calculated: the row's real height includes the tile's own 8dp padding, the
+        // band and the item's padding, and those change with the slot count. The first pass has no
+        // holder yet, so fall back to the estimate; the layout it triggers brings one and corrects it.
+        RecyclerView.ViewHolder dockVh = grid.findViewHolderForAdapterPosition(0);
+        int dockRow = dockVh != null && dockVh.itemView.getHeight() > 0
+                ? dockVh.itemView.getHeight()
+                : AppAdapter.dockRowHeightPx(screen, COLUMNS, adapter.dockSize(), density);
+        int want = Math.max(0, h - dockRow);
+        if (grid.getPaddingTop() != want) {
+            grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
+            // The padding moves the dock row without scrolling, so the scroll listener never sees
+            // it; on a cold start that leaves the glass above the tile until the next key press.
+            // The rows only reach their new place on the next layout pass, so reseat from there.
+            reseatPending = true;
+        }
+    }
+
+    /** Sets the dock's slot count: 1..8, shrinking sends the overflow back to the grid. */
+    private void applyDockSize(int next) {
+        if (adapter == null) return;
+        next = Math.max(DockStore.MIN_SIZE, Math.min(DockStore.MAX_SIZE, next));
+        if (next == adapter.dockSize()) return;
+        int removed = adapter.dock().setCapacity(next);
+        adapter.reload();
+        updateEmptyHint();
+        updateDockPadding();
+        grid.scheduleLayoutAnimation();
+        if (removed > 0) toast(getString(R.string.dock_size_trimmed, removed));
     }
 
     private void stopDockEdit() {
@@ -905,7 +1004,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         dockEditSwallowCenter = false;
     }
 
-    private void showAppMenu(final AppAdapter.Entry entry, final boolean pinned) {
+    private void showAppMenu(final AppAdapter.Entry entry, final boolean pinned, final int dockIndex) {
         if (isFinishing()) return;
         if (appMenu != null && appMenu.isShowing()) {
             appMenu.dismiss();
@@ -916,7 +1015,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         ((TextView) panel.findViewById(R.id.pinTitle))
                 .setText(pinned ? R.string.app_menu_unpin : R.string.app_menu_pin);
         View rowPin = panel.findViewById(R.id.rowPin);
+        View rowMove = panel.findViewById(R.id.rowMove);
         View rowUninstall = panel.findViewById(R.id.rowUninstall);
+        TextView moveTitle = panel.findViewById(R.id.moveTitle);
+        ImageView moveIcon = panel.findViewById(R.id.moveIcon);
+        final boolean rearrange = pinned && dockIndex >= 0;
+        rowMove.setVisibility(rearrange || !pinned ? View.VISIBLE : View.GONE);
+        if (rearrange) {
+            moveTitle.setText(R.string.app_menu_move);
+            moveIcon.setImageResource(R.drawable.ic_move);
+        } else if (!pinned) {
+            // Grid apps can start a folder or join one. Folders themselves are browsed by opening
+            // them; this is the only way in from an app tile.
+            moveTitle.setText(adapter.folders().all().isEmpty()
+                    ? R.string.folder_new : R.string.folder_move_in);
+            moveIcon.setImageResource(R.drawable.ic_plus);
+        }
         // A preinstalled app cannot be uninstalled (the system only offers "disable"), and asking the
         // uninstaller to try is how Xiaomi boxes answer with a confirmation that then does nothing.
         // The row stays useful: it opens App info, where the remote can disable the app instead.
@@ -944,6 +1058,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             popup.dismiss();
             togglePin(entry, pinned);
         });
+        rowMove.setOnClickListener(v -> {
+            popup.dismiss();
+            if (rearrange) {
+                startDockEdit(dockIndex, entry);
+                focusDock(dockIndex);
+            } else if (adapter.folders().all().isEmpty()) {
+                // Nothing to choose from: the row already says "New folder", so asking again is
+                // just one more OK press on a remote.
+                putInFolder(entry, null);
+            } else {
+                showFolderChoice(entry);
+            }
+        });
         rowUninstall.setOnClickListener(v -> {
             popup.dismiss();
             if (entry.system) {
@@ -963,6 +1090,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         DockStore dock = adapter.dock();
         if (alreadyPinned) {
             dock.unpin(entry.pkg);
+            // The app leaves the dock for the grid: keep its key so focus follows it there.
+            lastFocused = 1;
+            lastFocusedKey = entry.component.flattenToShortString();
             toast(getString(R.string.dock_removed, entry.label));
         } else {
             List<String> apps = dock.apps();
@@ -973,6 +1103,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 slot = 0;
             }
             dock.pinOver(entry.pkg, slot);
+            // A folder and the dock cannot both own the app; pinning takes it out of the folder.
+            adapter.folders().remove(entry.pkg);
+            lastFocused = 0;
+            lastDockIndex = Math.max(0, adapter.dockIndexOf(entry.pkg));
+            lastFocusedKey = entry.component.flattenToShortString();
             toast(getString(R.string.dock_added, entry.label));
         }
         refreshDock();
@@ -1013,13 +1148,33 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     /** Reload the grid so the new dock order takes effect, then put focus back where the user was. */
     private void refreshDock() {
         final String key = lastFocusedKey;
+        final int dockAt = lastDockIndex;
+        final boolean wasDock = lastFocused == 0;
         adapter.reload();
         updateEmptyHint();
         grid.scheduleLayoutAnimation();
+        if (dockEditing) {
+            focusDock(Math.min(dockEditIndex, adapter.dockSize() - 1));
+            return;
+        }
+        if (wasDock) {
+            // Pinning: the key is now a dock slot, positionOf() is -1, so stay on the dock.
+            // Unpinning: the key moved into the grid, so follow it there.
+            int pos = adapter.positionOf(key);
+            if (pos >= 0) {
+                lastFocused = pos;
+                focusTile(pos);
+            } else {
+                focusDock(dockAt);
+            }
+            return;
+        }
         int pos = adapter.positionOf(key);
         if (pos >= 0) {
             View v = grid.getLayoutManager().findViewByPosition(pos);
             if (v != null) v.requestFocus();
+        } else {
+            focusDock(dockAt);
         }
     }
 
@@ -1088,6 +1243,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                         return;
                     } else {
                         dock.pin(pkg, dock.apps().size());
+                        adapter.folders().remove(pkg);
                         h.tick.setVisibility(View.VISIBLE);
                         toast(getString(R.string.dock_added, label));
                     }
@@ -1113,6 +1269,350 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             if (first != null) first.requestFocus();
             else list.requestFocus();
         });
+    }
+
+    /**
+     * Choose the dock's slot count outright. Eight rows, current one ticked; picking a row resizes
+     * the dock behind the dropdown and keeps the list open so the user can try another count.
+     */
+    private void showDockSizePicker() {
+        if (adapter == null) return;
+        View panel = getLayoutInflater().inflate(R.layout.popup_dock, root, false);
+        RecyclerView list = panel.findViewById(R.id.rows);
+        list.setLayoutManager(new LinearLayoutManager(this));
+        list.setAdapter(new RecyclerView.Adapter<DockHolder>() {
+            @Override
+            public DockHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+                return new DockHolder(LayoutInflater.from(MainActivity.this)
+                        .inflate(R.layout.item_dock, parent, false));
+            }
+
+            @Override
+            public void onBindViewHolder(@NonNull DockHolder h, int position) {
+                final int size = DockStore.MIN_SIZE + position;
+                h.icon.setImageResource(R.drawable.ic_dock);
+                h.name.setText(getResources().getQuantityString(
+                        R.plurals.dock_size_choice, size, size));
+                h.tick.setVisibility(adapter.dockSize() == size ? View.VISIBLE : View.INVISIBLE);
+                h.item.setOnClickListener(v -> {
+                    applyDockSize(size);
+                    notifyDataSetChanged();
+                });
+            }
+
+            @Override
+            public int getItemCount() {
+                return DockStore.MAX_SIZE - DockStore.MIN_SIZE + 1;
+            }
+        });
+
+        View anchor = findViewById(R.id.btnControl);
+        dockSizePicker = glassPanel(panel, anchor, 260);
+        dockSizePicker.setOnDismissListener(this::focusControlPill);
+        dropIn(dockSizePicker, panel, anchor, Gravity.START);
+        final int at = Math.max(0, adapter.dockSize() - DockStore.MIN_SIZE);
+        list.post(() -> {
+            View row = list.getChildAt(at);
+            if (row != null && !row.requestFocus()) row.requestFocusFromTouch();
+            else if (row == null) list.requestFocus();
+        });
+    }
+
+    // ---- folders ---------------------------------------------------------------------------------
+
+    @Override
+    public void onDockEmptyPressed() {
+        showDockPicker();
+    }
+
+    @Override
+    public void onFolderOpen(FolderStore.Folder folder) {
+        showFolder(folder);
+    }
+
+    @Override
+    public void onFolderLongPressed(FolderStore.Folder folder) {
+        showFolderMenu(folder);
+    }
+
+    /** "移入文件夹" from a grid app: pick an existing folder or start a new one. */
+    private void showFolderChoice(final AppAdapter.Entry entry) {
+        final List<FolderStore.Folder> existing = adapter.folders().all();
+        View panel = getLayoutInflater().inflate(R.layout.popup_dock, root, false);
+        RecyclerView list = panel.findViewById(R.id.rows);
+        list.setLayoutManager(new LinearLayoutManager(this));
+        list.setAdapter(new RecyclerView.Adapter<DockHolder>() {
+            @Override
+            public DockHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+                return new DockHolder(LayoutInflater.from(MainActivity.this)
+                        .inflate(R.layout.item_dock, parent, false));
+            }
+
+            @Override
+            public void onBindViewHolder(@NonNull DockHolder h, int position) {
+                h.tick.setVisibility(View.INVISIBLE);
+                final boolean create = position == 0;
+                if (create) {
+                    h.icon.setImageResource(R.drawable.ic_plus);
+                    h.name.setText(R.string.folder_new);
+                } else {
+                    FolderStore.Folder f = existing.get(position - 1);
+                    h.icon.setImageResource(R.drawable.ic_apps);
+                    h.name.setText(f.name + " · " + f.pkgs.size());
+                }
+                h.item.setOnClickListener(v -> {
+                    if (folderPick != null) folderPick.dismiss();
+                    putInFolder(entry, create ? null : existing.get(position - 1));
+                });
+            }
+
+            @Override
+            public int getItemCount() {
+                return existing.size() + 1;
+            }
+        });
+        folderPick = centeredMenu(panel, 460);
+        folderPick.setOnDismissListener(() -> folderPick = null);
+        list.post(() -> {
+            if (list.getChildAt(0) != null) list.getChildAt(0).requestFocus();
+            else list.requestFocus();
+        });
+    }
+
+    /** Moves [entry] into [folder], or into a brand new one when [folder] is null. */
+    private void putInFolder(AppAdapter.Entry entry, FolderStore.Folder folder) {
+        FolderStore.Folder made = folder != null ? folder : adapter.folders().create(entry.pkg);
+        if (folder != null) adapter.folders().add(folder.id, entry.pkg);
+        adapter.reload();
+        updateEmptyHint();
+        grid.scheduleLayoutAnimation();
+        toast(getString(R.string.folder_added, entry.label));
+        lastFocusedKey = "folder:" + made.id;
+        int pos = adapter.positionOf(lastFocusedKey);
+        if (pos >= 0) {
+            lastFocused = pos;
+            focusTile(pos);
+        }
+    }
+
+    /** A folder's panel: its apps with names, and one "+" tile for adding another. */
+    private void showFolder(final FolderStore.Folder folder) {
+        if (folder == null) return;
+        if (folderPanel != null && folderPanel.isShowing()) folderPanel.dismiss();
+        openFolder = folder;
+        final List<AppAdapter.Entry> members = new ArrayList<>();
+        for (String pkg : folder.pkgs) {
+            AppAdapter.Entry e = adapter.entryForPkg(pkg);
+            if (e != null) members.add(e);
+        }
+
+        View panel = getLayoutInflater().inflate(R.layout.popup_folder, root, false);
+        ((TextView) panel.findViewById(R.id.folderTitle)).setText(folder.name);
+        RecyclerView gridView = panel.findViewById(R.id.folderGrid);
+        gridView.setLayoutManager(new GridLayoutManager(this, 4));
+        gridView.setAdapter(new RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+            @Override
+            public int getItemCount() {
+                return members.size() + 1;
+            }
+
+            @NonNull
+            @Override
+            public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+                return new RecyclerView.ViewHolder(LayoutInflater.from(parent.getContext())
+                        .inflate(R.layout.item_folder_app, parent, false)) {
+                };
+            }
+
+            @Override
+            public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+                ImageView icon = holder.itemView.findViewById(R.id.icon);
+                TextView name = holder.itemView.findViewById(R.id.name);
+                if (position == members.size()) {
+                    icon.setImageResource(R.drawable.ic_plus);
+                    name.setText(R.string.folder_add_app);
+                    holder.itemView.setOnClickListener(v -> showFolderAppPicker(folder));
+                    holder.itemView.setOnLongClickListener(v -> true);
+                    return;
+                }
+                final AppAdapter.Entry e = members.get(position);
+                icon.setImageDrawable(e.icon);
+                name.setText(e.label);
+                holder.itemView.setOnClickListener(v -> {
+                    if (folderPanel != null) folderPanel.dismiss();
+                    adapter.launchEntry(e);
+                });
+                holder.itemView.setOnLongClickListener(v -> {
+                    showFolderAppMenu(folder, e);
+                    return true;
+                });
+            }
+        });
+
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+        // Four across only when there are four to show; a one-app folder was a wide empty pane.
+        int columns = Math.min(4, members.size() + 1);
+        int width = Math.min(dp(12 + 187 * columns), (int) (screenW * 0.86f));
+        int rows = (members.size() + 1 + columns - 1) / columns;
+        int height = Math.min((int) (screenH * 0.82f),
+                dp(44) + rows * dp(140) + dp(16));
+        PopupWindow popup = new PopupWindow(panel, width, height, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        popup.setOnDismissListener(() -> {
+            folderPanel = null;
+            openFolder = null;
+        });
+        folderPanel = popup;
+        popup.showAtLocation(root, Gravity.CENTER, 0, 0);
+        gridView.post(() -> {
+            if (gridView.getChildAt(0) != null) gridView.getChildAt(0).requestFocus();
+            else gridView.requestFocus();
+        });
+    }
+
+    /** Long-press on a folder tile: add apps, or dissolve the folder (its apps return to the grid). */
+    private void showFolderMenu(final FolderStore.Folder folder) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_app, root, false);
+        ((TextView) panel.findViewById(R.id.appTitle)).setText(folder.name);
+        ((TextView) panel.findViewById(R.id.pinTitle)).setText(R.string.folder_add_app);
+        ((ImageView) panel.findViewById(R.id.pinIcon)).setImageResource(R.drawable.ic_plus);
+        View rowMove = panel.findViewById(R.id.rowMove);
+        TextView moveTitle = panel.findViewById(R.id.moveTitle);
+        ((ImageView) panel.findViewById(R.id.moveIcon)).setImageResource(R.drawable.ic_trash);
+        moveTitle.setText(R.string.folder_dissolve);
+        rowMove.setVisibility(View.VISIBLE);
+        View rowUninstall = panel.findViewById(R.id.rowUninstall);
+        rowUninstall.setVisibility(View.GONE);
+
+        final PopupWindow popup = centeredMenu(panel, 420);
+        appMenu = popup;
+        popup.setOnDismissListener(() -> appMenu = null);
+        panel.findViewById(R.id.rowPin).setOnClickListener(v -> {
+            popup.dismiss();
+            showFolderAppPicker(folder);
+        });
+        rowMove.setOnClickListener(v -> {
+            popup.dismiss();
+            adapter.folders().dissolve(folder.id);
+            adapter.reload();
+            updateEmptyHint();
+            grid.scheduleLayoutAnimation();
+            toast(getString(R.string.folder_dissolved));
+            focusDock(lastDockIndex);
+        });
+        panel.post(() -> panel.findViewById(R.id.rowPin).requestFocus());
+    }
+
+    /** Long-press on an app inside a folder: take it out, or uninstall it. */
+    private void showFolderAppMenu(final FolderStore.Folder folder, final AppAdapter.Entry entry) {
+        View panel = getLayoutInflater().inflate(R.layout.popup_app, root, false);
+        ((TextView) panel.findViewById(R.id.appTitle)).setText(entry.label);
+        ((TextView) panel.findViewById(R.id.pinTitle)).setText(R.string.folder_remove);
+        ((ImageView) panel.findViewById(R.id.pinIcon)).setImageResource(R.drawable.ic_move);
+        View rowMove = panel.findViewById(R.id.rowMove);
+        rowMove.setVisibility(View.GONE);
+        View rowUninstall = panel.findViewById(R.id.rowUninstall);
+        if (entry.system) {
+            ((TextView) panel.findViewById(R.id.uninstallTitle)).setText(R.string.app_menu_info);
+            ImageView icon = panel.findViewById(R.id.uninstallIcon);
+            icon.setImageResource(R.drawable.ic_settings);
+            if (Build.VERSION.SDK_INT >= 21) {
+                icon.setImageTintList(getResources().getColorStateList(R.drawable.pill_text));
+            }
+        }
+
+        final PopupWindow popup = centeredMenu(panel, 420);
+        appMenu = popup;
+        popup.setOnDismissListener(() -> appMenu = null);
+        panel.findViewById(R.id.rowPin).setOnClickListener(v -> {
+            popup.dismiss();
+            if (folderPanel != null) folderPanel.dismiss();
+            adapter.folders().remove(entry.pkg);
+            adapter.reload();
+            updateEmptyHint();
+            grid.scheduleLayoutAnimation();
+            FolderStore.Folder fresh = adapter.folders().byId(folder.id);
+            if (fresh != null) showFolder(fresh);
+        });
+        rowUninstall.setOnClickListener(v -> {
+            popup.dismiss();
+            if (folderPanel != null) folderPanel.dismiss();
+            if (entry.system) {
+                toast(getString(R.string.system_app_uninstall));
+                openAppInfo(entry.pkg);
+            } else {
+                uninstall(entry);
+            }
+        });
+        panel.post(() -> panel.findViewById(R.id.rowPin).requestFocus());
+    }
+
+    /** Pick another installed app (not docked, not already in a folder) to put into this folder. */
+    private void showFolderAppPicker(final FolderStore.Folder folder) {
+        final List<AppAdapter.Entry> pool = new ArrayList<>();
+        Set<String> docked = new HashSet<>(adapter.dock().apps());
+        for (AppAdapter.Entry e : adapter.entries()) {
+            if (docked.contains(e.pkg)) continue;
+            if (adapter.folders().folderOf(e.pkg) != null) continue;
+            pool.add(e);
+        }
+        if (pool.isEmpty()) {
+            toast(getString(R.string.folder_empty));
+            return;
+        }
+        Collections.sort(pool, (a, b) -> a.label.compareToIgnoreCase(b.label));
+        View panel = getLayoutInflater().inflate(R.layout.popup_dock, root, false);
+        RecyclerView list = panel.findViewById(R.id.rows);
+        list.setLayoutManager(new LinearLayoutManager(this));
+        list.setAdapter(new RecyclerView.Adapter<DockHolder>() {
+            @Override
+            public DockHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+                return new DockHolder(LayoutInflater.from(MainActivity.this)
+                        .inflate(R.layout.item_dock, parent, false));
+            }
+
+            @Override
+            public void onBindViewHolder(@NonNull DockHolder h, int position) {
+                AppAdapter.Entry e = pool.get(position);
+                h.icon.setImageDrawable(e.icon);
+                h.name.setText(e.label);
+                h.tick.setVisibility(View.INVISIBLE);
+                h.item.setOnClickListener(v -> {
+                    if (folderPick != null) folderPick.dismiss();
+                    adapter.folders().add(folder.id, e.pkg);
+                    adapter.reload();
+                    updateEmptyHint();
+                    grid.scheduleLayoutAnimation();
+                    FolderStore.Folder fresh = adapter.folders().byId(folder.id);
+                    if (fresh != null) showFolder(fresh);
+                });
+            }
+
+            @Override
+            public int getItemCount() {
+                return pool.size();
+            }
+        });
+        folderPick = centeredMenu(panel, 460);
+        folderPick.setOnDismissListener(() -> folderPick = null);
+        list.post(() -> {
+            if (list.getChildAt(0) != null) list.getChildAt(0).requestFocus();
+            else list.requestFocus();
+        });
+    }
+
+    /** A centred glass menu of the app menu's width; the caller keeps the returned popup. */
+    private PopupWindow centeredMenu(View panel, int widthDp) {
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        PopupWindow popup = new PopupWindow(panel,
+                Math.min(dp(widthDp), (int) (screenW * 0.82f)),
+                ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        popup.showAtLocation(root, Gravity.CENTER, 0, 0);
+        return popup;
     }
 
     private void toast(String text) {
@@ -1182,10 +1682,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             weatherStatusView.setText(weatherStatus());
             applyWeatherVideo();
             if (on) refreshWeather(true);
-            if (dockDecoration != null) {
-                dockDecoration.setOverWallpaper(wallpaperPresent());
-                grid.invalidateItemDecorations();
-            }
         });
 
         final TextView cityStatusView = panel.findViewById(R.id.cityStatus);
@@ -1272,10 +1768,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             // Drop the picture from the desk straight away; a wallpaper that stays on screen after
             // the user asked to remove it looks like the button did nothing.
             removeWallpaper();
-            if (dockDecoration != null) {
-                dockDecoration.setOverWallpaper(wallpaperPresent());
-                grid.invalidateItemDecorations();
-            }
             toast(getString(removed ? R.string.wallpaper_removed : R.string.wallpaper_none_toast));
         });
 
@@ -1327,6 +1819,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             handler.postDelayed(() -> {
                 if (isFinishing() || adapter == null) return;
                 if (!installed(this, pkg)) {
+                    // An uninstalled app must leave every owner: the dock, any folder, then the grid.
+                    if (dockEditing && dockEditKey != null && dockEditKey.startsWith(pkg + "/")) {
+                        stopDockEdit();
+                    }
+                    adapter.dock().unpin(pkg);
+                    adapter.folders().remove(pkg);
                     adapter.reload();
                     updateEmptyHint();
                     grid.scheduleLayoutAnimation();
@@ -1616,11 +2114,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (f != null && f.isFile() && f.length() > 0) showWallpaper(f);
         else removeWallpaper();
         applyWeatherVideo();
-        // The dock band has to follow: opaque over black, translucent over a picture.
-        if (dockDecoration != null) {
-            dockDecoration.setOverWallpaper(wallpaperPresent());
-            grid.invalidateItemDecorations();
-        }
     }
 
     /** The weather loop is a separate layer; it is on only when the user asked and a reading exists. */
@@ -1908,6 +2401,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (grid.findFocus() == null) return false;
         RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(lastFocused);
         if (vh == null) return false;
+        if (lastFocused == 0) {
+            View card = dockCardAt(vh, lastDockIndex);
+            if (card == null) return false;
+            onDockFocused(lastDockIndex, adapter.dockEntryAt(lastDockIndex), card);
+            return true;
+        }
         View card = vh.itemView.findViewById(R.id.card);
         if (card == null) return false;
         onTileFocused(lastFocused, card);
@@ -1925,12 +2424,59 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             });
             return;
         }
+        // Grid tiles start at 1: position 0 is the dock row as a whole.
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
-        if (dockEditing && position >= adapter.dockSize()) stopDockEdit();
+        if (dockEditing) stopDockEdit();
         // Video apps get their platform's hot posters behind the desk; everything else keeps the
         // default wallpaper. Same app again is a no-op inside the stage.
         if (stage != null) stage.showForPackage(adapter.pkgAt(position));
+        seatGlass(card);
+        hideHero();
+        hideProgram();
+        // Scroll just enough so the whole glass (not only the tile) is visible.
+        View item = (View) card.getParent();
+        Rect want = revealRect;
+        want.set(0, -(int) (12 * density), item.getWidth(), item.getHeight() + (int) (6 * density));
+        grid.requestChildRectangleOnScreen(item, want, false);
+    }
+
+    /** Focus on one dock slot. [entry] is null on an empty "+" slot. */
+    @Override
+    public void onDockFocused(int index, AppAdapter.Entry entry, View card) {
+        if (card.getWidth() == 0 || card.getHeight() == 0) {
+            card.post(() -> {
+                if (card.isFocused() && card.getWidth() > 0) onDockFocused(index, entry, card);
+            });
+            return;
+        }
+        lastFocused = 0;
+        lastDockIndex = Math.max(0, Math.min(index, adapter.dockSize() - 1));
+        lastFocusedKey = entry == null ? null : entry.component.flattenToShortString();
+        if (stage != null) stage.showForPackage(entry == null ? null : entry.pkg);
+        seatGlass(card);
+        if (entry == null) {
+            hideHero();
+            hideProgram();
+        }
+        // Park the dock on the padding line: the band's bottom edge is the screen's bottom edge.
+        RecyclerView.ViewHolder dockVh = grid.findViewHolderForAdapterPosition(0);
+        View dockItem = dockVh == null ? (View) card.getParent() : dockVh.itemView;
+        int decoratedTop = dockItem.getTop() - (int) (6 * density);
+        int dy = decoratedTop - grid.getPaddingTop();
+        if (Math.abs(dy) > 1) grid.smoothScrollBy(0, dy);
+        if (entry != null) {
+            Rect r = tileRect;
+            r.set(0, 0, card.getWidth(), card.getHeight());
+            root.offsetDescendantRectToMyCoords(card, r);
+            showHero(entry.label, adapter.ambientColorOf(entry), r.top - dy);
+            // The posters were just read for this package; show their title and dots right away.
+            updateProgram(stage.postersFor(entry.pkg), stage.currentPosterIndex());
+        }
+    }
+
+    /** Fit and spring the glass highlight to [card], wherever the card lives. */
+    private void seatGlass(View card) {
         // Tile rect in root coordinates, using layout positions (ignores the scale animation).
         Rect r = tileRect;
         r.set(0, 0, card.getWidth(), card.getHeight());
@@ -1976,30 +2522,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             springX.animateToFinalPosition(x);
             springY.animateToFinalPosition(y);
         }
-        View item = (View) card.getParent();
-        if (position < COLUMNS) {
-            // Dock: park it at the bottom of the screen and show the top shelf for this app.
-            int decoratedTop = item.getTop() - (int) (6 * density);
-            int dy = decoratedTop - grid.getPaddingTop();
-            if (Math.abs(dy) > 1) grid.smoothScrollBy(0, dy);
-            showHero(position, r.top - dy);
-            // The posters were just read for this package; show their title and dots right away.
-            updateProgram(stage.postersFor(adapter.pkgAt(position)), stage.currentPosterIndex());
-        } else {
-            hideHero();
-            hideProgram();
-            // Scroll just enough so the whole glass (not only the tile) is visible.
-            Rect want = revealRect;
-            want.set(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
-            grid.requestChildRectangleOnScreen(item, want, false);
-        }
     }
 
     // ---- top shelf -------------------------------------------------------------------------------
 
-    private void showHero(int position, float dockTopInRoot) {
-        String label = adapter.labelAt(position);
-        int color = adapter.ambientColorAt(position);
+    private void showHero(String label, int color, float dockTopInRoot) {
         float y = dockTopInRoot - 14 * density - 26 * density - heroName.getHeight();
         boolean changed = !label.contentEquals(heroName.getText());
 
@@ -2089,8 +2616,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     @Override
     public void onPosterShown(String pkg, List<HotPosters.Poster> posters, int index) {
-        if (adapter == null || lastFocused >= COLUMNS) return;
-        if (!pkg.equals(adapter.pkgAt(lastFocused))) return;
+        if (adapter == null || lastFocused != 0) return;
+        AppAdapter.Entry e = adapter.dockEntryAt(lastDockIndex);
+        if (e == null || !pkg.equals(e.pkg)) return;
         updateProgram(posters, index);
     }
 
@@ -2173,7 +2701,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             dot.setClickable(true);
             dot.setOnKeyListener(dotKeys);
             dot.setOnClickListener(v -> {
-                if (adapter != null) adapter.launchAt(lastFocused);
+                if (adapter == null) return;
+                if (lastFocused == 0) {
+                    AppAdapter.Entry e = adapter.dockEntryAt(lastDockIndex);
+                    if (e != null) adapter.launchEntry(e);
+                } else {
+                    adapter.launchAt(lastFocused);
+                }
             });
             dot.setOnFocusChangeListener((v, focused) -> {
                 if (!focused || stage == null) return;
@@ -2221,7 +2755,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             case KeyEvent.KEYCODE_DPAD_RIGHT:
                 return index < 0 || index == count - 1;
             case KeyEvent.KEYCODE_DPAD_DOWN:
-                focusTile(lastFocused % COLUMNS);
+                focusDock(lastDockIndex);
                 return true;
             case KeyEvent.KEYCODE_DPAD_UP:
                 findViewById(R.id.btnControl).requestFocus();
@@ -2253,27 +2787,23 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      * band's left edge.
      */
     private void positionProgramDots() {
-        if (programDots == null || programDots.getVisibility() != View.VISIBLE || adapter == null) return;
-        RecyclerView.ViewHolder first = grid.findViewHolderForAdapterPosition(0);
-        RecyclerView.ViewHolder last = grid.findViewHolderForAdapterPosition(
-                Math.max(0, adapter.dockSize() - 1));
-        if (first == null || last == null) return;
-        View leftCard = first.itemView.findViewById(R.id.card);
-        View rightCard = last.itemView.findViewById(R.id.card);
-        if (leftCard == null || rightCard == null) return;
+        if (programDots == null || programDots.getVisibility() != View.VISIBLE) return;
+        RecyclerView.ViewHolder dock = grid.findViewHolderForAdapterPosition(0);
+        if (dock == null) return;
+        View band = dock.itemView.findViewById(R.id.dockBand);
+        if (band == null) return;
         // Layout coordinates, not the visual ones: a focused dock tile is scaled up around its centre.
         int[] at = new int[2];
-        first.itemView.getLocationInWindow(at);
-        int bandLeft = at[0] + leftCard.getLeft() - dp(14);
-        int top = at[1] + leftCard.getTop();
-        last.itemView.getLocationInWindow(at);
-        int bandRight = at[0] + rightCard.getLeft() + rightCard.getWidth() + dp(14);
+        band.getLocationInWindow(at);
+        int bandLeft = at[0];
+        int bandRight = at[0] + band.getWidth();
+        int top = at[1];
         int w = programDots.getWidth() > 0
                 ? programDots.getWidth() : programDots.getChildCount() * dp(36);
         int h = programDots.getHeight() > 0 ? programDots.getHeight() : dp(36);
         programDots.setX((bandLeft + bandRight) / 2f - w / 2f);
-        // Just inside the glass band's top padding, clear of the tiles even when one is scaled.
-        programDots.setY(top - dp(6) - h);
+        // Just above the band, clear of the tiles even when one is scaled.
+        programDots.setY(top - dp(10) - h);
     }
 
     private int dp(float value) {
@@ -2282,27 +2812,38 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     // ---- navigation ------------------------------------------------------------------------------
 
+    /** Up/Down inside the dock row. */
+    @Override
+    public boolean onDockVerticalKey(int index, int keyCode) {
+        if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+            if (adapter.contentCount() > 0) focusTile(1);   // first app/folder row
+            return true;                                     // empty grid: stay on the dock
+        }
+        // Up from the dock goes into the dot strip when there is more than one show.
+        if (programDots.getVisibility() == View.VISIBLE && programDots.getChildCount() > 1) {
+            int at = Math.min(stage.currentPosterIndex(), programDots.getChildCount() - 1);
+            View dot = programDots.getChildAt(at);
+            if (dot != null) {
+                dot.requestFocus();
+                return true;
+            }
+        }
+        return false;                                        // otherwise let focus move to the top bar
+    }
+
     @Override
     public boolean onTileVerticalKey(int position, int keyCode) {
         int count = adapter.getItemCount();
         int target;
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) {
-                // Up from the dock goes into the dot strip when there is more than one show.
-                if (programDots.getVisibility() == View.VISIBLE && programDots.getChildCount() > 1) {
-                    int at = Math.min(stage.currentPosterIndex(), programDots.getChildCount() - 1);
-                    View dot = programDots.getChildAt(at);
-                    if (dot != null) {
-                        dot.requestFocus();
-                        return true;
-                    }
-                }
-                return false;                              // otherwise let focus move to the top bar
+            if (position <= COLUMNS) {                       // first grid row: back to the dock
+                focusDock(lastDockIndex);
+                return true;
             }
             target = position - COLUMNS;
         } else {
-            int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
-            if (position >= lastRowStart) return true;     // already on the last row: stay put
+            int lastRowStart = 1 + ((count - 2) / COLUMNS) * COLUMNS;
+            if (position >= lastRowStart) return true;       // already on the last row: stay put
             target = Math.min(position + COLUMNS, count - 1);
         }
         focusTile(target);
@@ -2336,7 +2877,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             else card.requestFocus();
             return;
         }
-        if (attempt < 40) {                       // ~2s, then fall back to the scroll route
+        // Wait for a layout only when there has never been one (cold start). Once the grid is laid
+        // out, a missing holder means the tile is off screen — under the dock — and waiting the full
+        // two seconds would turn one press of Down into a two-second pause.
+        if (attempt < 40 && grid.getChildCount() == 0) {
             grid.postDelayed(() -> waitForTile(pos, attempt + 1), 50);
             return;
         }
@@ -2357,7 +2901,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     private void updateEmptyHint() {
         if (emptyHint == null) return;
-        emptyHint.setVisibility(adapter != null && adapter.getItemCount() == 0
+        emptyHint.setVisibility(adapter != null && adapter.contentCount() == 0
                 ? View.VISIBLE : View.GONE);
     }
 
@@ -2674,7 +3218,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(true);
         // Taps land "inside" a full-screen popup, so outside-touch never fires; the scrim is the
-        // thing that closes it instead.
+        // thing that closes it instead. The scrim must not take focus itself, or the D-pad lands on
+        // it and the rows inside never get the highlight.
+        frame.setFocusable(false);
+        frame.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         frame.setOnClickListener(v -> popup.dismiss());
         return popup;
     }
@@ -3346,6 +3893,34 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                     }, true);
         }
 
+        // Dock size: the count row opens a chooser. The old pair of +/− pills sat below the volume
+        // slider where the remote did not naturally reach, and stepping 1..8 one press at a time
+        // was the wrong shape for a value with eight choices.
+        addControlRow(rows, R.drawable.ic_dock, getString(R.string.dock_size_title),
+                getResources().getQuantityString(R.plurals.dock_size_value, adapter.dockSize(), adapter.dockSize()),
+                () -> {
+                    if (controlPanel != null) controlPanel.dismiss();
+                    root.post(this::showDockSizePicker);
+                });
+
+        addControlRow(rows, R.drawable.ic_apps, getString(R.string.running_title),
+                getString(R.string.running_subtitle), () -> {
+                    if (controlPanel != null) controlPanel.dismiss();
+                    // Showing the next window from inside the previous one's dismiss leaves the new
+                    // popup without input focus: its rows never take the D-pad. One frame later is enough.
+                    root.post(this::showRunningPanel);
+                });
+
+        // The vendor already owns a cleaner that is allowed to touch other apps' caches; hand the
+        // job to it instead of pretending a third-party desk can clean anything itself.
+        addControlRow(rows, R.drawable.ic_clean, getString(R.string.clean_title),
+                getString(R.string.clean_subtitle), () -> {
+                    if (controlPanel != null) controlPanel.dismiss();
+                    root.post(() -> {
+                        if (!Cleaner.open(this)) toast(getString(R.string.clean_failed));
+                    });
+                });
+
         // Volume only: the panel backlight on this class of TV is driven by the vendor's own chip
         // service, so SCREEN_BRIGHTNESS writes move the setting without changing the picture.
         AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
@@ -4013,21 +4588,198 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         LinearLayout rows = panel.findViewById(R.id.detailRows);
         builder.build(rows);
         View anchor = findViewById(R.id.btnControl);
-        detailPanel = floatingOver(panel, anchor, 340);
+        detailPanel = floatingOver(panel, anchor, 340, 0x73FFFFFF, 0x59FFFFFF);
         riseIn(detailPanel, panel, anchor);
-        panel.post(() -> {
+        detailPanel.setOnDismissListener(this::focusControlPill);
+        focusFirstRow(rows, 25);
+    }
+
+    /** Back on the pill that opened a sheet, so the D-pad has somewhere to go again. */
+    private void focusControlPill() {
+        View pill = findViewById(R.id.btnControl);
+        if (!pill.requestFocus()) pill.requestFocusFromTouch();
+    }
+
+    /**
+     * Gives the D-pad a starting point once the popup window is up. A requestFocus queued before the
+     * window has focus is dropped, and closing the panel underneath can steal focus back a frame
+     * later, so keep watch for a moment — but only step in while nothing in the sheet has focus, or
+     * this would yank the highlight back from the viewer's own D-pad press.
+     */
+    private void focusFirstRow(LinearLayout rows, int tries) {
+        if (rows.hasWindowFocus() && rows.findFocus() == null) {
             for (int i = 0; i < rows.getChildCount(); i++) {
                 View v = rows.getChildAt(i);
                 if (v.isFocusable()) {
-                    v.requestFocus();
-                    return;
+                    // After a tap the desk is in touch mode, where plain requestFocus refuses a
+                    // view that is only remote-focusable; the touch-mode call still seats it.
+                    if (!v.requestFocus()) v.requestFocusFromTouch();
+                    break;
                 }
             }
-        });
+        }
+        if (tries > 0) rows.postDelayed(() -> focusFirstRow(rows, tries - 1), 80);
     }
 
     private void dismissDetail() {
         if (detailPanel != null) detailPanel.dismiss();
+    }
+
+    /**
+     * The control centre's running list. Android does not hand a home screen other apps' live
+     * processes, so the top half is the system's record of what was recently used (honest label),
+     * and the bottom half is this desk's own services, which we can actually see.
+     */
+    private void showRunningPanel() {
+        if (detailPanel != null && detailPanel.isShowing()) detailPanel.dismiss();
+        View panel = getLayoutInflater().inflate(R.layout.popup_detail, root, false);
+        ((TextView) panel.findViewById(R.id.detailTitle)).setText(R.string.running_title);
+        LinearLayout rows = panel.findViewById(R.id.detailRows);
+
+        addSectionHeader(rows, getString(R.string.running_recent_header));
+        if (Build.VERSION.SDK_INT < 21) {
+            addControlRow(rows, R.drawable.ic_apps, getString(R.string.running_api_old), null, null);
+        } else if (!usageAccessGranted()) {
+            addControlRow(rows, R.drawable.ic_settings, getString(R.string.running_grant_title),
+                    getString(R.string.running_grant_subtitle), () -> {
+                        dismissDetail();
+                        open(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+                    });
+        } else {
+            PackageManager pm = getPackageManager();
+            long dayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000L;
+            int shown = 0;
+            for (UsageScan.Recent r : UsageScan.recent(this, dayAgo, 20)) {
+                if (shown >= 8) break;   // the sheet scrolls, but 20 stops on a remote is a slog
+                if (r.pkg.equals(getPackageName()) || pm.getLaunchIntentForPackage(r.pkg) == null) {
+                    continue;   // not launchable from here, so "app info" is the only thing it offers
+                }
+                String label;
+                Drawable icon;
+                try {
+                    ApplicationInfo ai = pm.getApplicationInfo(r.pkg, 0);
+                    label = String.valueOf(pm.getApplicationLabel(ai));
+                    icon = pm.getApplicationIcon(ai);
+                } catch (PackageManager.NameNotFoundException e) {
+                    continue;
+                }
+                String when = DateUtils.getRelativeTimeSpanString(r.ts, System.currentTimeMillis(),
+                        DateUtils.MINUTE_IN_MILLIS).toString();
+                addAppRow(rows, icon, label, when, () -> {
+                    // Leaving the sheet up over the desk we come back to would strand focus outside it.
+                    dismissDetail();
+                    openAppInfo(r.pkg);
+                });
+                shown++;
+            }
+            if (shown == 0) {
+                addControlRow(rows, R.drawable.ic_apps, getString(R.string.running_no_recent), null, null);
+            }
+        }
+
+        addSectionHeader(rows, getString(R.string.running_services_header));
+        boolean a11y = homeKeyEnabled();
+        addControlRow(rows, R.drawable.ic_settings, getString(R.string.home_key_name),
+                getString(a11y ? R.string.running_a11y_on : R.string.running_a11y_off), () -> {
+                    dismissDetail();
+                    open(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                });
+        boolean dream = runningService("ClockDream");
+        addControlRow(rows, R.drawable.ic_settings, getString(R.string.dream_name),
+                getString(dream ? R.string.running_service_running : R.string.running_service_stopped),
+                () -> {
+                    dismissDetail();
+                    openAppInfo(getPackageName());
+                });
+
+        addFootnote(rows, getString(R.string.running_platform_note));
+
+        View anchor = findViewById(R.id.btnControl);
+        detailPanel = floatingOver(panel, anchor, 360, 0x73FFFFFF, 0x59FFFFFF);
+        riseIn(detailPanel, panel, anchor);
+        detailPanel.setOnDismissListener(this::focusControlPill);
+        focusFirstRow(rows, 25);
+    }
+
+    /** Whether the user allowed usage access; without it the recent list reads as empty. */
+    private boolean usageAccessGranted() {
+        if (Build.VERSION.SDK_INT < 21) return false;
+        try {
+            AppOpsManager ops = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
+            return ops != null && ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(), getPackageName()) == AppOpsManager.MODE_ALLOWED;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** The Home-key accessibility service is bound by the system, so its switch is the truth. */
+    private boolean homeKeyEnabled() {
+        String enabled = Settings.Secure.getString(getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        String on = Settings.Secure.getString(getContentResolver(),
+                Settings.Secure.ACCESSIBILITY_ENABLED);
+        if (enabled == null || !"1".equals(on)) return false;
+        ComponentName cn = new ComponentName(this, HomeKeyService.class);
+        return enabled.contains(cn.flattenToString()) || enabled.contains(cn.flattenToShortString());
+    }
+
+    /** Whether one of this app's own declared services is listed as running. */
+    private boolean runningService(String simpleName) {
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return false;
+        try {
+            List<ActivityManager.RunningServiceInfo> list = am.getRunningServices(60);
+            if (list == null) return false;
+            for (ActivityManager.RunningServiceInfo si : list) {
+                if (si.service != null && getPackageName().equals(si.service.getPackageName())
+                        && si.service.getClassName().endsWith("." + simpleName)) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException e) {
+            Errors.record("running", "services " + e.getClass().getSimpleName());
+        }
+        return false;
+    }
+
+    /** A small caps-ish section label inside a detail sheet; never takes focus. */
+    private void addSectionHeader(LinearLayout rows, String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(11);
+        tv.setTextColor(0x99FFFFFF);
+        tv.setPadding(dp(16), dp(10), dp(16), dp(4));
+        rows.addView(tv);
+    }
+
+    /** An explanatory line at the bottom of a sheet; the remote skips it. */
+    private void addFootnote(LinearLayout rows, String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(11);
+        tv.setTextColor(0x80FFFFFF);
+        tv.setLineSpacing(dp(2), 1f);
+        tv.setPadding(dp(16), dp(8), dp(16), dp(4));
+        rows.addView(tv);
+    }
+
+    /** A row with a real app icon (not a tinted glyph), for the recent-apps list. */
+    private void addAppRow(LinearLayout rows, Drawable icon, String title, String subtitle,
+                           Runnable action) {
+        View row = getLayoutInflater().inflate(R.layout.item_control_row, rows, false);
+        ImageView iconView = row.findViewById(R.id.icon);
+        if (icon != null) iconView.setImageDrawable(icon);
+        ((TextView) row.findViewById(R.id.title)).setText(title);
+        ((TextView) row.findViewById(R.id.subtitle)).setText(subtitle);
+        ImageView chevron = row.findViewById(R.id.chevron);
+        row.setOnFocusChangeListener((v, hasFocus) -> {
+            chevron.setColorFilter(hasFocus ? 0xFF111111 : 0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+            glideFocus(v, hasFocus, rows);
+        });
+        chevron.setColorFilter(0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+        row.setOnClickListener(v -> action.run());
+        rows.addView(row);
     }
 
     /** A round glass tile that closes the sheet and goes somewhere. */
@@ -4077,6 +4829,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     /** Same pill, with an unread dot after the label ("Check for updates" while a build is waiting). */
     private void addShortcutPill(LinearLayout row, int iconRes, String title, Runnable action,
                                  boolean unread) {
+        addShortcutPill(row, iconRes, title, action, unread, true);
+    }
+
+    /** Same pill; [dismiss] false keeps the panel open (the dock size pills need that). */
+    private void addShortcutPill(LinearLayout row, int iconRes, String title, Runnable action,
+                                 boolean unread, final boolean dismiss) {
         View pill = getLayoutInflater().inflate(R.layout.item_shortcut_pill, row, false);
         ImageView icon = pill.findViewById(R.id.icon);
         icon.setImageResource(iconRes);
@@ -4095,7 +4853,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             glideFocus(v, hasFocus, row);
         });
         pill.setOnClickListener(v -> {
-            if (controlPanel != null) controlPanel.dismiss();
+            if (dismiss && controlPanel != null) controlPanel.dismiss();
             action.run();
         });
         row.addView(pill);

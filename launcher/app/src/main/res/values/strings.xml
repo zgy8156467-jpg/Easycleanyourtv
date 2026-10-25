@@ -185,4 +185,48 @@
     <string name="phone_body">It runs on TVs, projectors and TV boxes only.\nOn a phone, please uninstall it and go back to the phone\'s own home screen.</string>
     <string name="phone_uninstall">Uninstall</string>
     <string name="phone_exit">Exit</string>
+
+    <string name="folder_name">Folder</string>
+    <string name="folder_new">New folder</string>
+    <string name="folder_move_in">Move to folder</string>
+    <string name="folder_add_app">Add app</string>
+    <string name="folder_added">%1$s moved into the folder</string>
+    <string name="folder_remove">Take out of folder</string>
+    <string name="folder_dissolve">Dissolve folder</string>
+    <string name="folder_dissolved">Folder dissolved</string>
+    <string name="folder_empty">No installed app left to add</string>
+    <string name="app_menu_move">Rearrange</string>
+
+    <string name="dock_size_title">Dock icons</string>
+    <plurals name="dock_size_value">
+        <item quantity="one">%1$d slot</item>
+        <item quantity="other">%1$d slots</item>
+    </plurals>
+    <plurals name="dock_size_choice">
+        <item quantity="one">%1$d slot</item>
+        <item quantity="other">%1$d slots</item>
+    </plurals>
+    <string name="dock_size_trimmed">%1$d app(s) went back to the grid</string>
+
+    <string name="running_title">Running apps &amp; services</string>
+    <string name="running_subtitle">Recently used · desk services</string>
+    <string name="running_recent_header">RECENTLY USED</string>
+    <string name="running_services_header">DESK SERVICES</string>
+    <string name="running_loading">Reading…</string>
+    <string name="running_no_recent">No recent activity</string>
+    <string name="running_grant_title">Allow usage access</string>
+    <string name="running_grant_subtitle">Needed to list recently used apps</string>
+    <string name="running_grant_usage">Open usage access settings</string>
+    <string name="running_platform_note">Android does not expose other apps’ live processes to a home screen; this list comes from system usage records.</string>
+    <string name="running_a11y_on">On</string>
+    <string name="running_a11y_off">Off</string>
+    <string name="running_service_running">Running</string>
+    <string name="running_service_stopped">Stopped</string>
+    <string name="running_api_old">This Android version has no recent-apps record</string>
+    <string name="running_empty_services">No desk service is running</string>
+
+    <string name="clean_title">One-tap clean</string>
+    <string name="clean_subtitle">Opens the TV\'s own cleaner</string>
+    <string name="clean_failed">No cleaner found on this TV</string>
+
 </resources>

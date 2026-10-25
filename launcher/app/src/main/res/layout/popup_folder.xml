@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A folder's own panel: its name, then the apps it holds with their names, plus one tile for
+     adding another app. Centred glass, four across. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/glass_panel"
+    android:padding="6dp"
+    android:elevation="16dp">
+
+    <TextView
+        android:id="@+id/folderTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingLeft="12dp"
+        android:paddingStart="12dp"
+        android:paddingRight="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="8dp"
+        android:textColor="#99FFFFFF"
+        android:textSize="15sp"
+        android:fontFamily="@font/outfit"
+        android:fontVariationSettings="'wght' 600"
+        android:letterSpacing="0.02"
+        android:singleLine="true"
+        android:ellipsize="end" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/folderGrid"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipToPadding="false"
+        android:scrollbars="none" />
+</LinearLayout>

@@ -70,27 +70,41 @@ libraries (`recyclerview` and `dynamicanimation`), **with no Compose or Glance, 
 recommendation engine**.
 Measured on a 2 GB Chinese TV box it sits at about **107 MB resident (PSS)**.
 
-### What's new in 2.0.15
+### What's new in 2.1.4
 
-- **Phones no longer get the desk**: they see a "This is a TV launcher" screen with an uninstall button.
-  TVs, projectors and TV boxes are unaffected.
-- **Pick wallpapers in a photo grid** built into the launcher, driven by the remote.
-- **Steadier trailers**: no more silent playback after the TV reclaims memory in the background (XGIMI),
-  and no more first-frame error on the Xiaomi MiTV4.
-- **Trailers from Bilibili's film and TV chart**, matched per app; 16:9 only.
-- **App names stay visible** under tiles and brighten on focus.
+- **Apps fold into folders**: long-press an icon → "New folder" or "Move to folder"; the tile stacks
+  the member icons, and opening it shows a glass panel where apps still launch, move out or uninstall.
+- **Pick how many dock icons you want**: Control centre → "Dock icons", 1 to 8; apps beyond a smaller
+  count drop back onto the grid.
+- **Dock apps uninstall too**: long-press a dock tile for "Rearrange / Take off the dock / Uninstall".
+- **New "Running apps & services"** in the control centre: apps used in the last 24 hours, one row each
+  opening the system app info page, plus the state of the desk's own services.
+- **New "One-tap clean"**: hands the job to the TV's own cleaner — Xiaomi via `CLEAN_DISK`, other brands
+  by scanning package and label names for a cleaner, falling back to the system storage settings.
+- 2.1.4 fixes the sheets opened from the control centre (running apps, Bluetooth devices) having no
+  glass background, which left the text unreadable over a bright wallpaper.
 
 ### Screenshots
 
-Captured from the 2.0.15 build at 1920×1080:
+Captured from the 2.1.4 build at 1920×1080:
 
-![The desk](docs/screenshot-zh.png)
+![The desk](docs/截图-2.1.4/01-桌面.jpg)
 
-Control centre (Menu key) and desktop settings:
+Control centre — dock icon count, running apps and services, one-tap clean:
 
-![Control centre](docs/screenshot-control.png)
+![Control centre](docs/截图-2.1.4/02-控制中心.jpg)
 
-![Desktop settings](docs/screenshot-settings.png)
+Dock size, 1 to 8:
+
+![Dock icons](docs/截图-2.1.4/03-Dock数量.jpg)
+
+Running apps and services:
+
+![Running apps and services](docs/截图-2.1.4/04-运行中应用与服务.jpg)
+
+A folder:
+
+![Folder](docs/截图-2.1.4/05-文件夹.jpg)
 
 ## How this differs from upstream
 
@@ -102,6 +116,10 @@ remote control.**
 | Feature | Upstream | Here |
 |---|---|---|
 | ⭐ **Editable dock** | edit `config.xml` and recompile | **Menu key** opens a checklist, or **long-press** a tile to pin/unpin. Stored on the TV |
+| 🗂 **Folders** | none | create or move apps in from the long-press menu; the tile stacks their icons, the panel shows icon and name; members are cleaned up after an uninstall |
+| 🔢 **Dock size, 1 to 8** | fixed | pick it in the control centre; apps beyond a smaller count return to the grid |
+| 📊 **Running apps & services** | none | the control centre lists what ran in the last 24 hours and opens system app info per row, plus desk service state |
+| 🧹 **One-tap clean** | bring your own cleaner | hands off to the TV's own cleaner; non-Xiaomi sets are found by package/label scan, falling back to storage settings |
 | 🎨 **Wallpapers** | push `wallpaper.jpg` over ADB | Panel with a **Bing daily** toggle or **pick a picture on the TV**; a new picture always replaces the old one, so **space use never grows** |
 | 🔢 **Icons per row, 3 to 8** | push `config.json` or recompile | Tap to cycle in the panel; first run **recommends a value from the actual screen width** |
 | 🌓 **Adaptive dock band** | fixed opaque; a black slab over a bright wallpaper | Turns translucent over a wallpaper, stays as upstream drew it on plain black |

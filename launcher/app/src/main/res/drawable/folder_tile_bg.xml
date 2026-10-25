@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- iOS-style liquid glass for a folder tile: a dark translucent base keeps the mini icons
+     legible over a bright wallpaper, and a white sheen running down from the top gives it the
+     glass body. Real blur needs API 31 and a RenderEffect; this reads the same on a TV at 3m. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#66101014" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <gradient android:angle="270" android:startColor="#4DFFFFFF" android:endColor="#12FFFFFF" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+</layer-list>

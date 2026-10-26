@@ -29,20 +29,21 @@ public final class QuickSettingsActivity extends Activity {
         setContentView(R.layout.activity_quick_settings);
         findViewById(R.id.scrim).setOnClickListener(v -> finish());
         LinearLayout rows = findViewById(R.id.rows);
-        addRow(rows, R.drawable.ic_settings, R.string.tv_settings, 0,
+        addRow(rows, R.drawable.ic_settings, R.string.tv_settings, 0, "Main",
                 MainActivity.tvSettingsIntent(this));
-        addRow(rows, R.drawable.ic_picture, R.string.quick_picture, 0,
+        addRow(rows, R.drawable.ic_picture, R.string.quick_picture, 0, "Picture",
                 MainActivity.pictureIntent(this));
-        addRow(rows, R.drawable.ic_wifi, R.string.quick_network, 0,
+        addRow(rows, R.drawable.ic_wifi, R.string.quick_network, 0, "network",
                 MainActivity.systemIntent(this, Settings.ACTION_WIFI_SETTINGS));
         Intent cast = MainActivity.castIntent(this);
-        if (cast != null) addRow(rows, R.drawable.ic_cast, R.string.quick_cast, 0, cast);
-        addRow(rows, R.drawable.ic_apps, R.string.quick_apps, R.string.quick_apps_hint,
+        if (cast != null) addRow(rows, R.drawable.ic_cast, R.string.quick_cast, 0, null, cast);
+        // No deep link to the app list on TCL; its settings top page is the closest page.
+        addRow(rows, R.drawable.ic_apps, R.string.quick_apps, R.string.quick_apps_hint, "Main",
                 new Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS));
         // The two panels the desk itself owns, so the overlay is the one menu that has everything.
-        addRow(rows, R.drawable.ic_dock, R.string.quick_dock, 0,
+        addRow(rows, R.drawable.ic_dock, R.string.quick_dock, 0, null,
                 new Intent(this, MainActivity.class).setAction(MainActivity.ACTION_DOCK_PICKER));
-        addRow(rows, R.drawable.ic_wallpaper, R.string.launcher_settings, 0,
+        addRow(rows, R.drawable.ic_wallpaper, R.string.launcher_settings, 0, null,
                 new Intent(this, MainActivity.class).setAction(MainActivity.ACTION_DESKTOP_SETTINGS));
         rows.getChildAt(0).requestFocus();
     }
@@ -78,7 +79,12 @@ public final class QuickSettingsActivity extends Activity {
         overridePendingTransition(0, 0);
     }
 
-    private void addRow(LinearLayout rows, int icon, int title, int status, Intent target) {
+    /**
+     * {@code tclCategory} is the TCL overlay page for this row, or null when the row is not a
+     * settings page; see {@link MainActivity#openPage}.
+     */
+    private void addRow(LinearLayout rows, int icon, int title, int status, String tclCategory,
+                        Intent target) {
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         ((ImageView) row.findViewById(R.id.icon)).setImageResource(icon);
         ((TextView) row.findViewById(R.id.title)).setText(title);
@@ -87,9 +93,7 @@ public final class QuickSettingsActivity extends Activity {
         if (status != 0) hint.setText(status);
         else hint.setVisibility(View.GONE);
         row.setOnClickListener(v -> {
-            try {
-                startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            } catch (RuntimeException e) {
+            if (!MainActivity.openPage(this, tclCategory, target)) {
                 // Letv's Android 4.3 ActivityManager throws a NullPointerException, not
                 // ActivityNotFoundException, when a settings intent cannot start.
                 Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();

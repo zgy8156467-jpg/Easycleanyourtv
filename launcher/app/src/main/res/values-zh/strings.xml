@@ -120,7 +120,7 @@
     <string name="a11y_first_title">让 Home 键回到这个桌面</string>
     <string name="a11y_first_notes">到「设置 → 无障碍 → Home 键回顶」打开，再在「使用情况访问」里允许「电视桌面」。不开也能用，但按 Home 会回原厂桌面。</string>
     <string name="a11y_guide_title">这台电视要用 ADB 打开 Home 键接管</string>
-    <string name="a11y_guide_notes">创维/酷开系统没有无障碍设置页，只能从电脑用 ADB 开一次。\n拍照保存并按指示操作。\n\n1. 电视上进工厂菜单：设置 → 通用 → 关于本机 → 本机信息 → 更多信息，停在这个页面按 上上下下左右左右，进「通用设置」把「ADB开关」打开，再重启电视。\n2. 电脑连同一个 Wi-Fi，执行：\nadb connect 【你的电视IP地址】:5555\nadb shell settings put secure enabled_accessibility_services %1$s/com.gathin.tvhome.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set %1$s GET_USAGE_STATS allow\n\n桌面每次升级系统都会关掉它，升级后重跑中间两条 settings 命令。</string>
+    <string name="a11y_guide_notes">这台电视的系统没有无障碍设置页，只能从电脑用 ADB 开一次。\n拍照保存并按指示操作。\n\n1. 先在电视上打开 ADB 调试，入口各家不同，一般在 设置 → 通用 / 关于本机 里；创维/酷开在「关于本机 → 本机信息 → 更多信息」页按 上上下下左右左右 进工厂菜单打开。\n2. 电脑连同一个 Wi-Fi，执行：\nadb connect 【你的电视IP地址】:5555\nadb shell settings put secure enabled_accessibility_services %1$s/com.gathin.tvhome.HomeKeyService\nadb shell settings put secure accessibility_enabled 1\nadb shell appops set %1$s GET_USAGE_STATS allow\n\n桌面每次升级系统都会关掉它，升级后重跑中间两条 settings 命令。</string>
     <string name="a11y_guide_ok">知道了</string>
     <string name="update_no_notes">这个版本没有写更新说明。</string>
     <string name="no_apps">没有找到可显示的应用</string>

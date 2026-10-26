@@ -49,6 +49,18 @@ PATCHES = {
 }
 
 
+# Sets we measured on our own bench that the upstream table does not list. Full
+# rows; appended after the upstream ones so the upstream count stays its own.
+EXTRA = [
+    ["TCL", "TCL 50V6EA", "ak30a5, com.tcl.cyberui", "Android 9", "中", "现代版",
+     "本机实测 2026-10-26：输入源（sourceprovider）、设置（ShowWindowService）、投屏已适配"],
+    ["Skyworth", "8R720_A5FP", "com.tianci.movieplatform, rootpage.HomeActivity", "Android 13", "新", "现代版",
+     "本机实测 2026-10-23：桌面不声明 CATEGORY_HOME；屏保 com.coocaa.screensaver；设置 com.skyworth.setting"],
+    ["Skyworth", "85A6E", "8R710_A6E, com.ccos.cooui.movieplatform, movieplatform.MainActivity", "Android 13", "新", "现代版",
+     "本机实测 2026-10-24：桌面类名要认宿主 com.ccos.cooui.movieplatform；没有无障碍设置页，只能用 ADB 开"],
+]
+
+
 def parse_table():
     lines = README.read_text(encoding="utf-8").splitlines()
     start = next(i for i, l in enumerate(lines) if l.startswith("| TV | OS |"))
@@ -150,6 +162,7 @@ def build_rows():
             if code in row[2]:
                 for col, value in patch.items():
                     row[col] = value
+    out.extend(list(r) for r in EXTRA)
     return out
 
 
@@ -159,7 +172,8 @@ def write_xlsx(rows):
     ws.title = "机型清单"
     head_fill = PatternFill("solid", fgColor="F2E3DA")
     head_font = Font(bold=True)
-    ws.append([f"共 {len(rows)} 台实测机型。数据来自上游 cleanyourtv/README.md；"
+    ws.append([f"共 {len(rows)} 台实测机型（上游 {len(rows) - len(EXTRA)} 台 + 本机 {len(EXTRA)} 台）。"
+               "数据来自上游 cleanyourtv/README.md；"
                "4.0–5.1 无样本，老设备版的兼容性靠群友实测，不代表已验证。"])
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COLS))
     ws.cell(1, 1).alignment = Alignment(wrap_text=True)
@@ -199,9 +213,10 @@ def write_md(rows):
     lines = [
         "# 机型兼容清单",
         "",
-        "共 %d 台实测机型。数据来自上游 `cleanyourtv/README.md` 的 “The full list”。"
+        "共 %d 台实测机型（上游 %d 台 + 本机 %d 台）。数据来自上游 `cleanyourtv/README.md` 的 "
+        "“The full list”；本机实测行在备注里注明。"
         "上游最低样本是 Android 5.1.1，**4.0–5.1 没有实测样本**，老设备版在这段区间靠群友装完后的"
-        "反馈和崩溃上报验证，不代表已验证。" % len(rows),
+        "反馈和崩溃上报验证，不代表已验证。" % (len(rows), len(rows) - len(EXTRA), len(EXTRA)),
         "",
         "| " + " | ".join(COLS) + " |",
         "|" + "|".join(["---"] * len(COLS)) + "|",

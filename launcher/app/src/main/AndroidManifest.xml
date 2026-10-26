@@ -40,6 +40,11 @@
          in MainActivity needs to see Xiaomi's own settings app. -->
     <queries>
         <package android:name="com.xiaomi.mitv.settings" />
+        <!-- TCL: Live TV app hosts the source provider, settings is the overlay service, and
+             cast lives in MultiScreenInteraction_TV. -->
+        <package android:name="com.tcl.tv" />
+        <package android:name="com.tcl.settings" />
+        <package android:name="com.tcl.MultiScreenInteraction_TV" />
     </queries>
 
     <application

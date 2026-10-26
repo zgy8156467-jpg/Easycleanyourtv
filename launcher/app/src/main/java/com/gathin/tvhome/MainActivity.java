@@ -1707,19 +1707,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // The TV's own settings live here too, so the one settings entry people look for is complete.
         panel.findViewById(R.id.rowTvNetwork).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
-            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+            openPage("network", systemIntent(Settings.ACTION_WIFI_SETTINGS));
         });
         panel.findViewById(R.id.rowTvPicture).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
-            open(pictureIntent(this));
+            openPage("Picture", pictureIntent(this));
         });
         panel.findViewById(R.id.rowTvApps).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
-            open(systemIntent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS));
+            // No deep link to the app list on TCL; its settings top page is the closest page.
+            openPage("Main", systemIntent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS));
         });
         panel.findViewById(R.id.rowTvSystem).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
-            open(tvSettingsIntent(this));
+            openPage("Main", tvSettingsIntent(this));
         });
 
         final TextView menuKeyStatus = panel.findViewById(R.id.menuKeyStatus);
@@ -3028,8 +3029,35 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      * Launcher entry of the vendor settings app for this profile, or null. MIUI TV's settings app
      * only opens through its explicit main activity; the others are ordinary launch intents.
      */
+    /**
+     * A vendor settings page, with the ordinary activity intent as the fallback. TCL's settings is
+     * an overlay service and its one launcher activity finishes itself a few seconds after starting
+     * (see {@link TclSource}), so on those sets the service has to be started instead of an
+     * activity. Everywhere else the fallback opens as before. False means nothing opened.
+     */
+    static boolean openPage(android.content.Context ctx, String tclCategory, Intent fallback) {
+        if (TclSource.openSettings(ctx, tclCategory)) return true;
+        if (fallback == null) return false;
+        fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            ctx.startActivity(fallback);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private void openPage(String tclCategory, Intent fallback) {
+        if (!openPage(this, tclCategory, fallback)) {
+            Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private static Intent vendorSettingsIntent(android.content.Context ctx) {
         for (String pkg : DeviceProfile.get(ctx).settingsPackages) {
+            // TCL's only launchable settings activity starts the overlay service and then
+            // finishes; starting it looks like a dead row. TclSource.openSettings is the way in.
+            if (TclSource.SETTINGS.equals(pkg)) continue;
             try {
                 if (XIAOMI_SETTINGS.equals(pkg)) {
                     Intent i = new Intent().setComponent(new ComponentName(
@@ -3047,7 +3075,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     /** The vendor's screen-cast UI, when it exposes one; null means no row is shown. */
     static Intent castIntent(android.content.Context ctx) {
         for (String pkg : new String[]{"com.xiaomi.mitv.smartshare", "com.miui.cast",
-                "com.xiaomi.mitv.cast"}) {
+                "com.xiaomi.mitv.cast", "com.tcl.MultiScreenInteraction_TV"}) {
             try {
                 Intent i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
                 if (i == null && Build.VERSION.SDK_INT >= 21) {
@@ -3100,7 +3128,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // the whole menu. Sets like the BYINTEK U4 report HDMI ports they do not have, and their own
         // picker is the honest one.
         if (!panelConfigured() && liveTv == null) {
-            if (rows.getChildCount() == 0) {
+            if (rows.getChildCount() == 0 && TclSource.present(this)) {
+                // TCL sets report no ports either; its Live TV app publishes the table through its
+                // source provider and switches when handed the id.
+                java.util.List<TclSource.Item> ports = TclSource.list(this);
+                for (TclSource.Item port : ports) {
+                    addInputRow(rows, popup, port.hdmi ? R.drawable.ic_input : R.drawable.ic_av,
+                            port.label, -1, () -> openTv(TclSource.viewIntent(port.id)));
+                }
+                if (ports.isEmpty()) {
+                    Errors.record("inputs", Build.MANUFACTURER + " " + Build.MODEL
+                            + ": TCL source provider listed nothing");
+                    Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+            } else if (rows.getChildCount() == 0) {
                 // Xiaomi sets report no ports at all, but their player can still switch them when
                 // asked with the port id. Listing the ports here is what makes "HDMI 1" work for a
                 // Switch instead of dumping the user into the vendor panel.
@@ -3137,6 +3179,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // Xiaomi's tvplayer declares no launcher category, so the app-level Live TV lookup above
         // finds nothing even when the set has a tuner. Its DTMB page is the live TV screen.
         if (liveTv == null && tunerId != null) liveTv = XiaomiSource.liveTvIntent(this);
+        // TCL's Live TV app has no launcher category either; its tuner source id is the page.
+        if (liveTv == null) liveTv = TclSource.liveTvIntent(this);
         if (liveTv != null) {
             if (rows.getChildCount() > 0) addSeparator(rows);
             final Intent liveTvIntent = liveTv;
@@ -3881,7 +3925,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         addTile(tiles, R.drawable.ic_wallpaper, getString(R.string.wallpaper), this::showWallpaperPicker);
         addTile(tiles, R.drawable.ic_dock, getString(R.string.favourites), this::showDockPicker);
         addTile(tiles, R.drawable.ic_settings, getString(R.string.tv_settings),
-                () -> open(tvSettingsIntent(this)));
+                () -> openPage("Main", tvSettingsIntent(this)));
 
         // Bluetooth opens a detail sheet instead of flipping the radio in place: on a TV remote a
         // stray OK used to take the whole house off Bluetooth.
@@ -4248,7 +4292,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     private void openWifiSettings() {
         dismissDetail();
-        open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
+        openPage("network", systemIntent(Settings.ACTION_WIFI_SETTINGS));
     }
 
     private static boolean wifiEnabled(WifiManager wm) {

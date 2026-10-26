@@ -91,6 +91,18 @@ final class DeviceProfile {
                     new String[]{"com.xiaomi.mitv.settings", "com.mitv.tvsettings",
                             "com.miui.tvsettings"},
                     true),
+            // TCL (50V6EA / ak30a5, Android 9, 2026-10-26). The stock desktop does declare
+            // CATEGORY_HOME so the probe finds it anywhere; naming it covers firmware that starts
+            // the home page by component. Only MainActivity counts — the same package also hosts
+            // WebActivity for the firmware's own links, and covering those would be a hijack.
+            // Settings is com.tcl.settings, an overlay-only app; see TclSource.
+            new Brand("tcl",
+                    new String[]{"tcl"},
+                    new String[]{"com.tcl.cyberui"},
+                    new String[]{"cyberui.MainActivity"},
+                    NONE,
+                    new String[]{"com.tcl.settings"},
+                    false),
             new Brand("skyworth",
                     new String[]{"skyworth", "coocaa", "tianci", "创维", "酷开"},
                     new String[]{"com.tianci.movieplatform"},

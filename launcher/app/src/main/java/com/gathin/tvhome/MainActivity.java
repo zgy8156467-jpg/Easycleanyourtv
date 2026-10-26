@@ -389,6 +389,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                // The dot strip hangs off the dock band, so it scrolls with the row too. Without this
+                // it stayed where the band happened to be when focus landed (mid-screen, or above it
+                // after a deep scroll) while the row was still travelling back to the bottom.
+                if (programDots.getVisibility() == View.VISIBLE) {
+                    programDots.setY(programDots.getY() - dy);
+                }
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 if (springY.isRunning()) springY.animateToFinalPosition(glassTargetY);

@@ -21,7 +21,8 @@
         android:paddingTop="6dp"
         android:paddingBottom="6dp"
         android:background="@drawable/dock_bar_bg"
-        android:clipChildren="false">
+        android:clipChildren="false"
+        android:clipToPadding="false">
 
         <LinearLayout
             android:id="@+id/dockRow"

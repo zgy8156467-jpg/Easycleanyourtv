@@ -22,8 +22,8 @@ android {
         applicationId 'com.gathin.tvhome'
         minSdk 23
         targetSdk 29
-        versionCode 63
-        versionName '2.1.5'
+        versionCode 65
+        versionName '2.1.7'
         buildConfigField 'String', 'FEEDBACK_TOKEN', "\"${feedbackToken}\""
     }
 

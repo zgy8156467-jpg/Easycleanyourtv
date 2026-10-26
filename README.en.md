@@ -70,8 +70,16 @@ libraries (`recyclerview` and `dynamicanimation`), **with no Compose or Glance, 
 recommendation engine**.
 Measured on a 2 GB Chinese TV box it sits at about **107 MB resident (PSS)**.
 
-### What's new in 2.1.4
+### What's new in 2.1.7
 
+- **TCL and Skyworth/Coocaa support**: settings, input source and casting open directly (tested on a
+  TCL 50V6EA; the Skyworth notes are in [docs/适配/创维.md](docs/适配/创维.md)).
+- **New key mapping** in the control centre: keys the stock desktop answered but this one never sees
+  can be bound to input source / control centre / casting, on the desk only.
+- Fixed: coming back from a folder below the dock left the programme dots stranded half way.
+- Fixed: the leftmost and rightmost dock icons showed a dark edge when focused — the enlarged card was
+  clipped by the frosted band.
+- Everything from 2.1.4 is still here; if you are new, start with these:
 - **Apps fold into folders**: long-press an icon → "New folder" or "Move to folder"; the tile stacks
   the member icons, and opening it shows a glass panel where apps still launch, move out or uninstall.
 - **Pick how many dock icons you want**: Control centre → "Dock icons", 1 to 8; apps beyond a smaller
@@ -81,8 +89,6 @@ Measured on a 2 GB Chinese TV box it sits at about **107 MB resident (PSS)**.
   opening the system app info page, plus the state of the desk's own services.
 - **New "One-tap clean"**: hands the job to the TV's own cleaner — Xiaomi via `CLEAN_DISK`, other brands
   by scanning package and label names for a cleaner, falling back to the system storage settings.
-- 2.1.4 fixes the sheets opened from the control centre (running apps, Bluetooth devices) having no
-  glass background, which left the text unreadable over a bright wallpaper.
 
 ### Screenshots
 

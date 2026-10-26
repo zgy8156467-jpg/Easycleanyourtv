@@ -1711,7 +1711,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         });
         panel.findViewById(R.id.rowTvPicture).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
-            openPage("Picture", pictureIntent(this));
+            openPage("picture", pictureIntent(this));
         });
         panel.findViewById(R.id.rowTvApps).setOnClickListener(v -> {
             if (wallpaperPanel != null) wallpaperPanel.dismiss();
@@ -3134,7 +3134,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 java.util.List<TclSource.Item> ports = TclSource.list(this);
                 for (TclSource.Item port : ports) {
                     addInputRow(rows, popup, port.hdmi ? R.drawable.ic_input : R.drawable.ic_av,
-                            port.label, -1, () -> openTv(TclSource.viewIntent(port.id)));
+                            port.label, -1, () -> openTv(TclSource.viewIntent(this, port.id)));
                 }
                 if (ports.isEmpty()) {
                     Errors.record("inputs", Build.MANUFACTURER + " " + Build.MODEL

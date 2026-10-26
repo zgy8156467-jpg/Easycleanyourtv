@@ -3,6 +3,7 @@ package com.gathin.tvhome;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.net.Uri;
 
@@ -18,18 +19,22 @@ import java.util.Locale;
  * switches when its TVActivity is handed the id as an int extra {@code targetSourceId}. Measured
  * 2026-10-26: 2 TV, 3 AV1, 8 HDMI1, 9 HDMI2 — its own id table, not Android's.
  *
+ * <p>Treated as a TCL-family contract, not a 50V6EA quirk: detection goes through the provider's
+ * owning package and the TV activity is built from that package's name, so a co-branded TCL that
+ * ships the provider under another package name still gets the port list.
+ *
  * <p>Settings is not an activity worth launching. com.tcl.settings/.ui.MainActivity is a stub that
  * starts the overlay service and finishes within a few seconds, which from the desk looks like
  * nothing happened and drops the user back on it. The overlay is
  * {@code com.tcl.settings/.ShowWindowService}, action SHOW_WINDOW, extras Type=Settings and
- * Catagory (TCL's spelling) picking the page. Only Main/Picture/network/about open a page of their
- * own; any other value falls back to Main.
+ * Catagory (TCL's spelling) picking the page. Only network/about, and picture <em>lowercase</em>,
+ * open a page of their own; any other value -- including "Picture" -- falls back to Main.
  */
 final class TclSource {
 
     private static final String LIVE_TV = "com.tcl.tv";
-    private static final String TV_ACTIVITY = "com.tcl.tv.TVActivity";
-    private static final String PROVIDER = "content://com.tcl.tv.sourceprovider";
+    private static final String PROVIDER_AUTHORITY = "com.tcl.tv.sourceprovider";
+    private static final String PROVIDER = "content://" + PROVIDER_AUTHORITY;
     static final String SETTINGS = "com.tcl.settings";
     private static final String SHOW_WINDOW_SERVICE = "com.tcl.settings.ShowWindowService";
     private static final String SHOW_WINDOW_ACTION = "com.tcl.settings.SHOW_WINDOW";
@@ -52,13 +57,29 @@ final class TclSource {
     private TclSource() {
     }
 
-    /** True on a set with TCL's Live TV app. The provider and the overlay live in it. */
+    /**
+     * True on a set with TCL's Live TV app. Asked of the provider rather than of the package
+     * name, so TCL-family firmware that ships the same provider under a different package (a
+     * co-branded build, say) still gets the port table; the plain package check stays as a second
+     * chance because the provider can be absent before Live TV has been opened once.
+     */
     static boolean present(Context ctx) {
+        return tvPackage(ctx) != null;
+    }
+
+    /** The package that owns the source provider, or null when this is not a TCL set. */
+    private static String tvPackage(Context ctx) {
+        try {
+            ProviderInfo info = ctx.getPackageManager().resolveContentProvider(PROVIDER_AUTHORITY, 0);
+            if (info != null && info.packageName != null) return info.packageName;
+        } catch (RuntimeException ignored) {
+            // Fall through to the name check.
+        }
         try {
             ctx.getPackageManager().getPackageInfo(LIVE_TV, 0);
-            return true;
+            return LIVE_TV;
         } catch (PackageManager.NameNotFoundException e) {
-            return false;
+            return null;
         }
     }
 
@@ -91,8 +112,10 @@ final class TclSource {
     }
 
     /** Ask the Live TV app to switch to {@code id} and show it full screen. */
-    static Intent viewIntent(int id) {
-        return new Intent().setClassName(LIVE_TV, TV_ACTIVITY).putExtra(EXTRA_SOURCE, id);
+    static Intent viewIntent(Context ctx, int id) {
+        String pkg = tvPackage(ctx);
+        if (pkg == null) pkg = LIVE_TV;
+        return new Intent().setClassName(pkg, pkg + ".TVActivity").putExtra(EXTRA_SOURCE, id);
     }
 
     /**
@@ -100,7 +123,7 @@ final class TclSource {
      * nothing; the tuner source id is the page. Null when the app is absent.
      */
     static Intent liveTvIntent(Context ctx) {
-        return present(ctx) ? viewIntent(TV) : null;
+        return present(ctx) ? viewIntent(ctx, TV) : null;
     }
 
     /**

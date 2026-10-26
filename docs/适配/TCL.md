@@ -19,7 +19,8 @@
 
 - component：`com.tcl.settings/.ShowWindowService`
 - action：`com.tcl.settings.SHOW_WINDOW`
-- extras：`Type=Settings`，`Catagory=Main` / `Picture` / `network` / `about`（拼写就是 `Catagory`）
+- extras：`Type=Settings`，`Catagory=Main` / `picture` / `network` / `about`（拼写就是 `Catagory`）
+- **大小写有讲究**：`picture` 必须小写，`Picture` 会落到 `Main`（2026-10-26 实机验证）。
 - 其它值一律落到 `Main`。应用列表没有独立页，也只能开 `Main`。
 
 `MainActivity.openPage()` 统一处理：TCL 先走 overlay，不是 TCL 或服务起不来就回退原来的 Intent。
@@ -30,6 +31,17 @@
 - provider 返回 `SourceId` / `SourceName`。实测 id：**2 = TV，3 = AV1，8 = HDMI1，9 = HDMI2**（TCL 自己的表，不是 Android 的）。
 - 切换：`com.tcl.tv.TVActivity` + int extra `targetSourceId`。
 - Live TV 应用没有 launcher category，要按上面的组件名直接起。
+
+面板入口是 控制中心 → 输入源，列表取自 provider，去掉 TV 后是 AV1 / HDMI 1 / HDMI 2，最后一行「直播电视」回 tuner。
+
+2026-10-26 实机验证两种起法都能切：
+
+- **热启动**：TVActivity 还在后台，intent 走 `onNewIntent`；
+- **冷启动**：先 `am force-stop com.tcl.tv` 再点，TVActivity 起来后同样切过去。
+
+两种都看得到 `LiveTv: setInputSource() desSourceType = EN_TCL_HDMI1/2`。
+
+识别**不看包名**，而是看谁声明了 `com.tcl.tv.sourceprovider`（`resolveContentProvider`），TVActivity 用同一个包名拼出来。这套契约按 TCL 家族算，同一固件体系的其它 TCL / 雷鸟型号理论上通用；换型号时先确认 provider 返回的表还是这四个 id。
 
 ## 代码改动
 
@@ -42,6 +54,13 @@
 
 ## 验证情况
 
-- 编译通过；这台 50V6EA 上 `adb install -r` 后截图确认首页、控制中心显示正常。
-- **没有逐项点测**输入源切换、设置各页、投屏，只在代码层面按上面的实测常量实现。
-- 未验证：其它 TCL / 雷鸟（FFalcon）机型、海外 Android TV 版（C06 系列）、Home 键接管在这台机上的长期稳定性。
+2026-10-26 在 50V6EA 上装 2.1.5 逐项点测：
+
+- 首页、控制中心、Dock 显示正常。
+- 设置：电视设置（Main）、显示与画面（`picture`）、网络（`network`）、关于本机（`about`）四个入口都能打开对应 overlay 页。
+- 输入源：AV1 / HDMI 1 / HDMI 2 / 直播电视，行都在；HDMI 1、HDMI 2 冷启动和热启动都切换成功，直播电视回到 tuner。
+- 投屏：打开了 `com.tcl.MultiScreenInteraction_TV`。
+- 无障碍：这台机器 `ACTION_ACCESSIBILITY_SETTINGS` 没有任何 Activity 接，确认没有无障碍页；ADB 引导弹窗正常。
+- 覆盖安装后无障碍服务会被系统关掉，需要重跑一次 `settings put secure` 两条命令（引导文案里已写）。
+
+未验证：其它 TCL / 雷鸟（FFalcon）机型、海外 Android TV 版（C06 系列）、Home 键接管在这台机上的长期稳定性、AV1 口（没接线，未切）。

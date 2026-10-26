@@ -31,7 +31,7 @@ public final class QuickSettingsActivity extends Activity {
         LinearLayout rows = findViewById(R.id.rows);
         addRow(rows, R.drawable.ic_settings, R.string.tv_settings, 0, "Main",
                 MainActivity.tvSettingsIntent(this));
-        addRow(rows, R.drawable.ic_picture, R.string.quick_picture, 0, "Picture",
+        addRow(rows, R.drawable.ic_picture, R.string.quick_picture, 0, "picture",
                 MainActivity.pictureIntent(this));
         addRow(rows, R.drawable.ic_wifi, R.string.quick_network, 0, "network",
                 MainActivity.systemIntent(this, Settings.ACTION_WIFI_SETTINGS));

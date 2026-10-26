@@ -43,6 +43,12 @@
 
 识别**不看包名**，而是看谁声明了 `com.tcl.tv.sourceprovider`（`resolveContentProvider`），TVActivity 用同一个包名拼出来。这套契约按 TCL 家族算，同一固件体系的其它 TCL / 雷鸟型号理论上通用；换型号时先确认 provider 返回的表还是这四个 id。
 
+## 遥控器信号源键
+
+TCL 固件在系统层就把 `KEYCODE_TV_INPUT` 交给了 `com.tcl.tvservice`，再把 `com.tcl.tv.TVActivity` 拉到前台切到上次的信号源。实测 App 的 `onKeyDown` 和无障碍 `onKeyEvent`（已开 `flagRequestFilterKeyEvents`）都收不到这个键，所以**这个键绑不上**——不是桌面没处理，是它根本到不了任何 App。
+
+2.1.5 起桌面提供通用的「按键映射」（控制中心 → 按键映射）：任意能送达 App 的按键都可以绑定到内置功能（输入源 / 控制中心 / 投屏 / 电视设置 / 直播电视 / 回到顶部），只在桌面生效，不拦截别的 App。TCL 上可以用遥控器上别的空闲键（例如颜色键）来开输入源面板。
+
 ## 代码改动
 
 - `DeviceProfile`：新增 `tcl` 品牌（`com.tcl.cyberui` 桌面、`com.tcl.settings` 设置包）。

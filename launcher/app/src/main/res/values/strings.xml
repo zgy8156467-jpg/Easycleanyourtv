@@ -228,5 +228,15 @@
     <string name="clean_title">One-tap clean</string>
     <string name="clean_subtitle">Opens the TV\'s own cleaner</string>
     <string name="clean_failed">No cleaner found on this TV</string>
+    <string name="keymap_title">Remote keys</string>
+    <string name="keymap_subtitle">Make a remote button run a desk action</string>
+    <string name="keymap_add">Add a key</string>
+    <string name="keymap_press">Press the remote button you want to bind</string>
+    <string name="keymap_press_hint">Press Back to cancel</string>
+    <string name="keymap_empty">No keys bound yet</string>
+    <string name="keymap_bound">Bound to %1$s</string>
+    <string name="keymap_removed">Binding removed</string>
+    <string name="keymap_top">Back to top</string>
+    <string name="keymap_unbind">Unbind</string>
 
 </resources>

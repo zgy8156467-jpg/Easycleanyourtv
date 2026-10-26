@@ -169,6 +169,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private int dotCount;
     /** The control centre panel, so Back can close it. */
     private PopupWindow controlPanel;
+    /** While "press a key" is up, the next press is captured, not run. */
+    private boolean capturingKeys;
+    private PopupWindow keyCapture;
     /** The network / Bluetooth detail sheet opened from it. */
     private PopupWindow detailPanel;
     /** The update prompt; one at a time, so a slow check cannot stack two. */
@@ -752,6 +755,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (activity != null) activity.runOnUiThread(activity::scrollToTop);
     }
 
+    /** Called by {@link HomeKeyService} when the remote's source key is pressed on the desk. */
+    static void onInputKeyFromService() {
+        MainActivity activity = live == null ? null : live.get();
+        if (activity != null) activity.runOnUiThread(activity::showInputs);
+    }
+
     /** Back to the first tile, the way the Home button behaves on a phone launcher. */
     private void scrollToTop() {
         if (adapter == null) return;
@@ -846,6 +855,28 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             }
             KeyLog.record(code, event.getRepeatCount(), focus);
         }
+        // Capturing a new binding: the next non-navigation press is the key, Back cancels.
+        if (capturingKeys && event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.getRepeatCount() > 0) return true;
+            if (code == KeyEvent.KEYCODE_BACK) {
+                endKeyCapture();
+                focusControlPill();
+                return true;
+            }
+            if (!isNavKey(code)) {
+                endKeyCapture();
+                root.post(() -> pickAction(code));
+            }
+            return true;
+        }
+        // The user's own bindings (control centre → Remote keys). Checked before every built-in
+        // handler so a learned button wins.
+        int mapped = KeyMap.get(this, code);
+        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0
+                && mapped != KeyMap.NONE) {
+            runMapped(mapped);
+            return true;
+        }
         // Rearranging the dock: left/right swaps with the neighbour, OK removes, Back finishes.
         if (dockEditing) {
             if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) {
@@ -882,6 +913,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // plain KEYCODE_HOME, a shell-injected key) never re-deliver the HOME intent at all.
         if (code == KeyEvent.KEYCODE_HOME) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) scrollToTop();
+            return true;
+        }
+        // The remote's source key. On TCL the vendor desktop used to answer it and ours does not
+        // handle it at all, so on those sets the button just did nothing once this desk was front.
+        if (code == KeyEvent.KEYCODE_TV_INPUT) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) showInputs();
             return true;
         }
         if (code == KeyEvent.KEYCODE_MENU
@@ -3904,6 +3941,165 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      * The macOS-style panel: network and Bluetooth switches, the volume slider, and the
      * three places this remote otherwise buries (inputs, TV settings, casting).
      */
+    // ---- remote key bindings --------------------------------------------------------------------
+
+    /** Run a bound action. Only built-in destinations: nothing here can leave the desk confusing. */
+    private void runMapped(int func) {
+        switch (func) {
+            case KeyMap.INPUTS:
+                showInputs();
+                break;
+            case KeyMap.CONTROL:
+                showControlCenter();
+                break;
+            case KeyMap.CAST: {
+                Intent cast = castIntent(this);
+                if (cast == null) toast(getString(R.string.not_available));
+                else open(cast);
+                break;
+            }
+            case KeyMap.SETTINGS:
+                openPage("Main", tvSettingsIntent(this));
+                break;
+            case KeyMap.LIVE_TV: {
+                Intent live = liveTvIntent();
+                if (live == null) toast(getString(R.string.not_available));
+                else openTv(live);
+                break;
+            }
+            case KeyMap.TOP:
+                scrollToTop();
+                break;
+        }
+    }
+
+    /** Whatever this set calls Live TV: configured package first, then the vendor source tables. */
+    private Intent liveTvIntent() {
+        Intent live = null;
+        if (!liveTvPkg.isEmpty()) {
+            if (Build.VERSION.SDK_INT >= 21) {
+                live = getPackageManager().getLeanbackLaunchIntentForPackage(liveTvPkg);
+            }
+            if (live == null) live = getPackageManager().getLaunchIntentForPackage(liveTvPkg);
+        }
+        if (live == null) live = TclSource.liveTvIntent(this);
+        if (live == null) live = XiaomiSource.liveTvIntent(this);
+        return live;
+    }
+
+    /** The bindings list, plus "add a key". Rows open the action picker; "unbind" is in there. */
+    private void showKeyMapPanel() {
+        View panel = getLayoutInflater().inflate(R.layout.popup_detail, root, false);
+        ((TextView) panel.findViewById(R.id.detailTitle)).setText(R.string.keymap_title);
+        LinearLayout rows = panel.findViewById(R.id.detailRows);
+        for (java.util.Map.Entry<Integer, Integer> e : KeyMap.all(this).entrySet()) {
+            final int code = e.getKey();
+            addControlRow(rows, R.drawable.ic_input, keyName(code), actionName(e.getValue()), () -> {
+                dismissDetail();
+                root.post(() -> pickAction(code));
+            });
+        }
+        addControlRow(rows, R.drawable.ic_settings, getString(R.string.keymap_add),
+                getString(R.string.keymap_press), () -> {
+                    dismissDetail();
+                    root.post(this::captureKey);
+                });
+        if (rows.getChildCount() == 1) {
+            addFootnote(rows, getString(R.string.keymap_empty));
+        }
+
+        View anchor = findViewById(R.id.btnControl);
+        detailPanel = floatingOver(panel, anchor, 360, 0x73FFFFFF, 0x59FFFFFF);
+        riseIn(detailPanel, panel, anchor);
+        detailPanel.setOnDismissListener(this::focusControlPill);
+        focusFirstRow(rows, 25);
+    }
+
+    /**
+     * Wait for one press. The prompt window is deliberately not focusable, so every key still comes
+     * through {@link #dispatchKeyEvent}; navigation is ignored and Back cancels.
+     */
+    private void captureKey() {
+        View panel = getLayoutInflater().inflate(R.layout.popup_detail, root, false);
+        ((TextView) panel.findViewById(R.id.detailTitle)).setText(R.string.keymap_title);
+        LinearLayout rows = panel.findViewById(R.id.detailRows);
+        addControlRow(rows, R.drawable.ic_input, getString(R.string.keymap_press),
+                getString(R.string.keymap_press_hint), null);
+
+        View anchor = findViewById(R.id.btnControl);
+        keyCapture = floatingOver(panel, anchor, 320, 0x73FFFFFF, 0x59FFFFFF);
+        keyCapture.setFocusable(false);
+        riseIn(keyCapture, panel, anchor);
+        capturingKeys = true;
+    }
+
+    private void endKeyCapture() {
+        capturingKeys = false;
+        if (keyCapture != null) {
+            keyCapture.dismiss();
+            keyCapture = null;
+        }
+    }
+
+    private static boolean isNavKey(int code) {
+        return code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+                || code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                || code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
+                || code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_HOME
+                || code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_SETTINGS;
+    }
+
+    private void pickAction(int code) {
+        int[] names = {R.string.inputs, R.string.control_center, R.string.quick_cast,
+                R.string.tv_settings, R.string.live_tv, R.string.keymap_top, R.string.keymap_unbind};
+        int[] funcs = {KeyMap.INPUTS, KeyMap.CONTROL, KeyMap.CAST,
+                KeyMap.SETTINGS, KeyMap.LIVE_TV, KeyMap.TOP, KeyMap.NONE};
+        int[] icons = {R.drawable.ic_input, R.drawable.ic_settings, R.drawable.ic_cast,
+                R.drawable.ic_settings, R.drawable.ic_av, R.drawable.ic_apps,
+                R.drawable.ic_settings};
+
+        View panel = getLayoutInflater().inflate(R.layout.popup_detail, root, false);
+        ((TextView) panel.findViewById(R.id.detailTitle)).setText(keyName(code));
+        LinearLayout rows = panel.findViewById(R.id.detailRows);
+        for (int i = 0; i < names.length; i++) {
+            final int func = funcs[i];
+            final String label = getString(names[i]);
+            addControlRow(rows, icons[i], label, null, () -> {
+                if (func == KeyMap.NONE) {
+                    KeyMap.remove(this, code);
+                    toast(getString(R.string.keymap_removed));
+                } else {
+                    KeyMap.put(this, code, func);
+                    toast(getString(R.string.keymap_bound, label));
+                }
+                dismissDetail();
+                root.post(this::showKeyMapPanel);
+            });
+        }
+
+        View anchor = findViewById(R.id.btnControl);
+        detailPanel = floatingOver(panel, anchor, 360, 0x73FFFFFF, 0x59FFFFFF);
+        riseIn(detailPanel, panel, anchor);
+        detailPanel.setOnDismissListener(this::focusControlPill);
+        focusFirstRow(rows, 25);
+    }
+
+    private static String keyName(int code) {
+        return KeyEvent.keyCodeToString(code).replace("KEYCODE_", "").replace('_', ' ');
+    }
+
+    private String actionName(int func) {
+        switch (func) {
+            case KeyMap.INPUTS: return getString(R.string.inputs);
+            case KeyMap.CONTROL: return getString(R.string.control_center);
+            case KeyMap.CAST: return getString(R.string.quick_cast);
+            case KeyMap.SETTINGS: return getString(R.string.tv_settings);
+            case KeyMap.LIVE_TV: return getString(R.string.live_tv);
+            case KeyMap.TOP: return getString(R.string.keymap_top);
+            default: return getString(R.string.keymap_unbind);
+        }
+    }
+
     private void showControlCenter() {
         if (controlPanel != null && controlPanel.isShowing()) {
             controlPanel.dismiss();
@@ -3963,6 +4159,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                     root.post(() -> {
                         if (!Cleaner.open(this)) toast(getString(R.string.clean_failed));
                     });
+                });
+
+        // Some remotes ship dedicated buttons the stock desktop answered and ours never sees
+        // (on TCL the source key is eaten by the firmware before any app). Let the owner teach the
+        // desk whichever buttons do reach it.
+        addControlRow(rows, R.drawable.ic_settings, getString(R.string.keymap_title),
+                getString(R.string.keymap_subtitle), () -> {
+                    if (controlPanel != null) controlPanel.dismiss();
+                    root.post(this::showKeyMapPanel);
                 });
 
         // Volume only: the panel backlight on this class of TV is driven by the vendor's own chip

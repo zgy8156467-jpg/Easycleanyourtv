@@ -243,6 +243,17 @@ public class HomeKeyService extends AccessibilityService {
 
     @Override
     public boolean onKeyEvent(KeyEvent event) {
+        // The remote's source key. TCL's firmware handles the code itself and sends it to its TV
+        // app, which from the desk looks like the button doing nothing (it just re-opens the same
+        // input). While the desk is in front, take it and open our own source panel; anywhere else
+        // leave it alone so the vendor UI still answers.
+        if (event.getKeyCode() == KeyEvent.KEYCODE_TV_INPUT) {
+            if (!getPackageName().equals(foreground)) return false;
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
+                MainActivity.onInputKeyFromService();
+            }
+            return true;
+        }
         if (event.getKeyCode() == KeyEvent.KEYCODE_HOME) {
             // The system swallows Home when the launcher is already in front — it re-sends the same
             // intent and the task manager drops it as a duplicate, so the desk never hears about it.

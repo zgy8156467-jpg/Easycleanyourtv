@@ -496,10 +496,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             }
         });
 
-        // If the user left the Bing wallpaper on, make sure today's picture is there before they see
-        // the desk. Runs in the background and re-applies only when something actually changed.
+        // The picture already on disk goes up first, whatever fetched it: a wallpaper that only
+        // appears after the next fetch leaves every cold start with a blank desk (MIUI keeps the
+        // file but relaunches the desk, so "已开启 · 328 KB" was sitting over an empty background).
         wall = new Wallpaper(this);
-        if (wall.autoDaily() && !wall.hasWallpaper()) {
+        if (wall.hasWallpaper()) showWallpaper(wall.file());
+        // Bing daily: refreshBingIfDue() itself skips a day that is already on disk, so this is the
+        // once-a-day swap rather than a download on every start.
+        if (wall.autoDaily()) {
             new Thread(() -> {
                 final boolean done = wall.refreshBingIfDue();
                 if (done) handler.post(this::applyWallpaper);
@@ -1179,10 +1183,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         }
     }
 
+    /**
+     * The system app page for a package. The detail page is the direct route, but plenty of TV
+     * firmwares do not have one (Hisense/VIDAA answers nothing at all for it), which is how the
+     * Favourites menu's 「应用信息」 ended on 「此电视不支持」. The device's own app list opens
+     * everywhere, so it is the second try; only when neither exists does the toast say so.
+     */
     private void openAppInfo(String pkg) {
+        Intent details = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + pkg))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
-            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.parse("package:" + pkg)));
+            startActivity(details);
+            return;
+        } catch (RuntimeException ignored) {
+        }
+        Intent list = systemIntent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(list);
         } catch (RuntimeException e) {
             toast(getString(R.string.not_available));
         }
@@ -1701,12 +1720,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                     boolean done = wall.refreshBingIfDue();
                     handler.post(() -> {
                         status.setText(wallpaperStatus());
-                        if (done) {
-                            toast(getString(R.string.bing_updated));
-                            applyWallpaper();
-                        } else {
-                            toast(getString(R.string.bing_failed));
-                        }
+                        // Put whatever is on disk on screen either way: a picture fetched on an
+                        // earlier start used to leave the desk blank while the row said it was set.
+                        applyWallpaper();
+                        if (done) toast(getString(R.string.bing_updated));
+                        // Nothing fetched is not a failure when today's picture is already here.
+                        else if (wall.isCurrent()) toast(getString(R.string.bing_current));
+                        else toast(getString(R.string.bing_failed));
                     });
                 }).start();
             } else {
@@ -2975,6 +2995,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         greeting.setText(res);
     }
 
+    /**
+     * Switch to a port the set reports through {@code tv_input}. The channel view intent is the
+     * platform's own way in, but it only leads anywhere on sets that ship a Live Channels-style TV
+     * app. MIUI TVs have none — {@code am start} on the passthrough URI answers "unable to resolve"
+     * — so every press there used to end on 「此电视不支持」 while the vendor player, which does
+     * switch ports, sat one package away. When nothing answers the standard intent the vendor's own
+     * switching is used instead.
+     */
+    private void openInput(TvInputs.Item info) {
+        Intent target = TvInputs.viewIntent(info.id);
+        if (target.resolveActivity(getPackageManager()) == null) {
+            int port = XiaomiSource.portFor(this, info.label);
+            target = port != 0 ? XiaomiSource.viewIntent(port) : sourcePanelIntent();
+        }
+        if (target == null) {
+            Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        openTv(target);
+    }
+
     /** Switching to a TV input or channel usually lands in PatchWall's own TV window — stay out of its way. */
     private void openTv(Intent i) {
         HomeKeyService.suppressTakeover(20000);
@@ -3154,7 +3195,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
                 if (!hdmi) sawNonHdmi = true;
                 addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, info.label,
-                        info.state, () -> openTv(TvInputs.viewIntent(info.id)));
+                        info.state, () -> openInput(info));
             }
         }
         Intent liveTv = null;

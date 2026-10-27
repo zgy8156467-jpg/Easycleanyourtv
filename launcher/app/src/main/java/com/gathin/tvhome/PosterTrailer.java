@@ -1,13 +1,13 @@
 package com.gathin.tvhome;
 
-import android.graphics.SurfaceTexture;
 import android.media.MediaPlayer;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Surface;
-import android.view.TextureView;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -25,10 +25,14 @@ import java.util.Set;
 /**
  * The clip that plays over a poster three seconds after it appears.
  *
- * <p>One TextureView, one MediaPlayer, reused for every poster. A TextureView rather than a
- * VideoView on purpose: this TV's media stack renders SurfaceView video into a separate hardware
- * plane that the compositor can drop, so the clip ran but never reached the panel. A TextureView
- * is a normal view whose frames are drawn into the desk's own window.
+ * <p>One SurfaceView, one MediaPlayer, reused for every poster. It has to be a SurfaceView: this
+ * TV's media stack (MiPlayer over the Amlogic decoder) sends every clip into the hardware video
+ * plane, and a TextureView's SurfaceTexture only ever receives black — the clip ran at 30 fps and
+ * the plane dropped every frame. The plane is exactly what a SurfaceView is composited from.
+ *
+ * <p>The panel has one video decoder to share: the desk's weather loop runs on the same stack, so
+ * playing both at once killed the media server and took both players down. {@link Listener} lets
+ * the stage pause the weather before a clip takes it, and start it again afterwards.
  *
  * <p>Every MediaPlayer call runs on its own thread. On this firmware {@code reset()} can block in
  * the media server for as long as it likes; calling it from {@code onPause} froze the main thread
@@ -48,6 +52,9 @@ final class PosterTrailer {
 
         /** The clip ended, failed, or timed out. */
         void onFinished();
+
+        /** A clip wants the hardware decoder, or has let go of it. */
+        void onDecoderBusy(boolean busy);
     }
 
     private static final String TAG = "TvHome.Trailers";
@@ -60,7 +67,7 @@ final class PosterTrailer {
     private static final int KEEP_FILES = 8;
 
     private final HotPosters store;
-    private final TextureView video;
+    private final SurfaceView video;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Handler playerHandler;
     private final Listener listener;
@@ -69,7 +76,13 @@ final class PosterTrailer {
 
     // Touched by the player thread only.
     private MediaPlayer player;
-    private Surface surface;
+
+    // Main thread only: a clip whose surface has not been created yet.
+    private File pendingFile;
+    private String pendingKey;
+    private int pendingGen;
+    /** True while the stage has been told this clip holds the decoder. */
+    private boolean busyNotified;
 
     // Main thread writes, player thread reads.
     private volatile int gen;
@@ -104,35 +117,39 @@ final class PosterTrailer {
         HandlerThread thread = new HandlerThread("trailer-player");
         thread.start();
         playerHandler = new Handler(thread.getLooper());
-        video = new SafeTextureView(parent.getContext());
-        // No background on a TextureView: setBackgroundColor throws UnsupportedOperationException
-        // on every Android version ("TextureView doesn't support displaying a background drawable"),
-        // which took down MainActivity while activity_main was being inflated. The poster behind it
-        // is opaque, so nothing is lost.
-        video.setAlpha(0f);   // laid out and ready from the start; alpha keeps the surface alive
+        video = new SurfaceView(parent.getContext());
+        // A SurfaceView cannot be faded — alpha is ignored — so it is shown and hidden instead. The
+        // opaque poster sits above it; showing the layer only when a clip is up is what keeps the
+        // punched-through area from sitting black behind a still.
+        video.setVisibility(View.INVISIBLE);
         video.setFocusable(false);
         video.setFocusableInTouchMode(false);
         video.setClickable(false);
         if (android.os.Build.VERSION.SDK_INT >= 16) {
             video.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         }
-        video.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+        video.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
-            public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
+            public void surfaceCreated(SurfaceHolder holder) {
+                if (pendingFile == null) return;
+                File file = pendingFile;
+                String key = pendingKey;
+                int g = pendingGen;
+                pendingFile = null;
+                pendingKey = null;
+                Surface s = holder.getSurface();
+                if (s != null && s.isValid()) startOn(file, key, g, s);
             }
 
             @Override
-            public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int h) {
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             }
 
             @Override
-            public boolean onSurfaceTextureDestroyed(SurfaceTexture st) {
-                stop();
-                return true;
-            }
-
-            @Override
-            public void onSurfaceTextureUpdated(SurfaceTexture st) {
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                // The layer went away (hidden, or the window left the screen): the clip cannot go on.
+                pendingFile = null;
+                stopPlayer();
             }
         });
         parent.addView(video, new ViewGroup.LayoutParams(
@@ -239,23 +256,35 @@ final class PosterTrailer {
         playingFile = null;
     }
 
-    /** Main thread: take the surface, then hand the file to the player thread. */
+    /** Main thread: show the layer, then hand the file to the player thread once it has a surface. */
     private void startPlayback(File file, String key, int g) {
-        SurfaceTexture st = video.getSurfaceTexture();
-        if (st == null) {
-            Log.w(TAG, "no surface");
-            finish();
-            return;
-        }
-        final Surface s = new Surface(st);
         active = true;
         playingKey = key;
         playingFile = file;
+        setBusy(true);
+        // Showing the layer creates the surface a moment later; surfaceCreated picks the file up.
+        video.setVisibility(View.VISIBLE);
+        Surface s = video.getHolder().getSurface();
+        if (s != null && s.isValid()) {
+            startOn(file, key, g, s);
+            return;
+        }
+        pendingFile = file;
+        pendingKey = key;
+        pendingGen = g;
+    }
+
+    /** One notification per transition, so a start/stop pair does not wake the weather twice. */
+    private void setBusy(boolean busy) {
+        if (busyNotified == busy) return;
+        busyNotified = busy;
+        if (listener != null) listener.onDecoderBusy(busy);
+    }
+
+    /** Player thread: the surface is the holder's own, so it is never released here. */
+    private void startOn(final File file, final String key, final int g, final Surface s) {
         playerHandler.post(() -> {
-            if (g != gen || !active) {
-                s.release();
-                return;
-            }
+            if (g != gen || !active) return;
             try {
                 if (player == null) {
                     player = new MediaPlayer();
@@ -271,9 +300,7 @@ final class PosterTrailer {
                 } else {
                     player.reset();
                 }
-                if (surface != null) surface.release();
-                surface = s;
-                player.setSurface(surface);
+                player.setSurface(s);
                 player.setDataSource(file.getPath());
                 player.prepareAsync();
             } catch (Exception e) {
@@ -418,7 +445,6 @@ final class PosterTrailer {
         }
         main.post(() -> {
             if (!active) return;
-            video.setAlpha(1f);
             Log.i(TAG, "playing " + (poster == null ? "" : poster.title));
             if (listener != null) listener.onStarted();
             main.removeCallbacks(cap);
@@ -433,23 +459,26 @@ final class PosterTrailer {
         if (prepareTimeout != null) main.removeCallbacks(prepareTimeout);
         main.removeCallbacks(cap);
         stopPlayer();
-        video.setAlpha(0f);
+        video.setVisibility(View.INVISIBLE);
+        setBusy(false);
     }
 
     /** Queue a reset; never blocks the caller, which may well be the main thread. */
     private void stopPlayer() {
         active = false;
+        pendingFile = null;
+        pendingKey = null;
         if (disposed) return;
         playerHandler.post(() -> {
             if (player != null) {
                 try {
+                    player.setSurface(null);
+                } catch (Exception ignored) {
+                }
+                try {
                     player.reset();
                 } catch (Exception ignored) {
                 }
-            }
-            if (surface != null) {
-                surface.release();
-                surface = null;
             }
         });
     }
@@ -459,7 +488,8 @@ final class PosterTrailer {
         if (prepareTimeout != null) main.removeCallbacks(prepareTimeout);
         main.removeCallbacks(cap);
         stopPlayer();
-        video.setAlpha(0f);
+        video.setVisibility(View.INVISIBLE);
+        setBusy(false);
         if (listener != null) listener.onFinished();
     }
 

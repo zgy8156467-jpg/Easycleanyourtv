@@ -31,6 +31,7 @@
     <string name="bing_daily_hint">One new picture a day</string>
     <string name="bing_fetching">"Fetching today's picture…"</string>
     <string name="bing_updated">Wallpaper updated</string>
+    <string name="bing_current">Today\'s picture is already set</string>
     <string name="bing_failed">Could not fetch the picture</string>
     <string name="pick_wallpaper">Choose a picture on this TV</string>
     <string name="choose_photo">Choose a picture</string>

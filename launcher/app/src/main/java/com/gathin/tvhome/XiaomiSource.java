@@ -6,6 +6,9 @@ import android.content.pm.PackageManager;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Input sources on Xiaomi/Redmi TVs.
@@ -64,6 +67,22 @@ final class XiaomiSource {
         out.add(new Item(TV, "TV"));
         out.add(new Item(AV, "AV"));
         return out;
+    }
+
+    /**
+     * The vendor port id for a {@code tv_input} label ("HDMI3", "HDMI 3", "AV", "TV"), or 0 when
+     * the label is not a port this table covers or the vendor player is not installed. Used where
+     * the platform's channel view intent has no handler and the vendor player is the only way in.
+     */
+    static int portFor(Context ctx, String label) {
+        if (label == null || list(ctx).isEmpty()) return 0;
+        Matcher m = Pattern.compile("(?i)hdmi\\s*([1-3])").matcher(label);
+        if (m.find()) return HDMI1 + Integer.parseInt(m.group(1)) - 1;
+        String upper = label.trim().toUpperCase(Locale.ROOT);
+        if (upper.contains("HDMI")) return 0;   // an HDMI 4 or a name of its own: leave it to the panel
+        if (upper.contains("AV")) return AV;
+        if (upper.equals("TV")) return TV;
+        return 0;
     }
 
     /** Ask the vendor player to switch to {@code id} and show it full screen. */

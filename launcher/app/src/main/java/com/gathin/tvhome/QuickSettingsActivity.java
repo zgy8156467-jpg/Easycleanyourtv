@@ -41,10 +41,12 @@ public final class QuickSettingsActivity extends Activity {
         addRow(rows, R.drawable.ic_apps, R.string.quick_apps, R.string.quick_apps_hint, "Main",
                 new Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS));
         // The two panels the desk itself owns, so the overlay is the one menu that has everything.
-        addRow(rows, R.drawable.ic_dock, R.string.quick_dock, 0, null,
-                new Intent(this, MainActivity.class).setAction(MainActivity.ACTION_DOCK_PICKER));
-        addRow(rows, R.drawable.ic_wallpaper, R.string.launcher_settings, 0, null,
-                new Intent(this, MainActivity.class).setAction(MainActivity.ACTION_DESKTOP_SETTINGS));
+        // These are not settings pages, so they do not go through openPage: that path says the TV
+        // cannot do it when the start fails, which for the desk's own windows is never true — the
+        // desk is right there.
+        addDeskRow(rows, R.drawable.ic_dock, R.string.quick_dock, MainActivity.ACTION_DOCK_PICKER);
+        addDeskRow(rows, R.drawable.ic_wallpaper, R.string.launcher_settings,
+                MainActivity.ACTION_DESKTOP_SETTINGS);
         rows.getChildAt(0).requestFocus();
     }
 
@@ -85,13 +87,7 @@ public final class QuickSettingsActivity extends Activity {
      */
     private void addRow(LinearLayout rows, int icon, int title, int status, String tclCategory,
                         Intent target) {
-        View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
-        ((ImageView) row.findViewById(R.id.icon)).setImageResource(icon);
-        ((TextView) row.findViewById(R.id.title)).setText(title);
-        row.findViewById(R.id.dot).setVisibility(View.GONE);
-        TextView hint = row.findViewById(R.id.status);
-        if (status != 0) hint.setText(status);
-        else hint.setVisibility(View.GONE);
+        View row = newRow(rows, icon, title, status);
         row.setOnClickListener(v -> {
             if (!MainActivity.openPage(this, tclCategory, target)) {
                 // Letv's Android 4.3 ActivityManager throws a NullPointerException, not
@@ -101,5 +97,38 @@ public final class QuickSettingsActivity extends Activity {
             finish();
         });
         rows.addView(row);
+    }
+
+    /** One of the desk's own panels: the desk window is the destination, whatever its action. */
+    private void addDeskRow(LinearLayout rows, int icon, int title, String action) {
+        View row = newRow(rows, icon, title, 0);
+        row.setOnClickListener(v -> {
+            Intent panel = new Intent(this, MainActivity.class).setAction(action)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                startActivity(panel);
+            } catch (RuntimeException e) {
+                // The action was not delivered; the desk itself still is. Landing there beats a
+                // toast that claims the TV cannot do something it is doing right now.
+                try {
+                    startActivity(new Intent(this, MainActivity.class)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (RuntimeException ignored) {
+                }
+            }
+            finish();
+        });
+        rows.addView(row);
+    }
+
+    private View newRow(LinearLayout rows, int icon, int title, int status) {
+        View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+        ((ImageView) row.findViewById(R.id.icon)).setImageResource(icon);
+        ((TextView) row.findViewById(R.id.title)).setText(title);
+        row.findViewById(R.id.dot).setVisibility(View.GONE);
+        TextView hint = row.findViewById(R.id.status);
+        if (status != 0) hint.setText(status);
+        else hint.setVisibility(View.GONE);
+        return row;
     }
 }

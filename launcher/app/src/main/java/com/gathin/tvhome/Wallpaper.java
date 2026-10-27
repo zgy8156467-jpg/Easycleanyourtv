@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Log;
 
 import java.io.File;
@@ -38,8 +39,15 @@ final class Wallpaper {
      * www.bing.com (8 devices reported it in the feedback console) while cn.bing.com, the China
      * endpoint, resolves fine, so it is tried first; the picture URL then stays on whichever
      * host answered.
+     *
+     * Android 4.x boxes reset the TLS handshake to Bing ("Connection reset by peer") even with
+     * TLS 1.2 forced on, and that is most of the legacy wallpaper failures in the console. Those
+     * versions ask over plain HTTP instead; Bing answers the same JSON, and the picture URL keeps
+     * the host's scheme, so the download stays on HTTP too. Nothing private crosses this request.
      */
-    private static final String[] BING_HOSTS = {"https://cn.bing.com", "https://www.bing.com"};
+    private static final String[] BING_HOSTS = Build.VERSION.SDK_INT < 21
+            ? new String[]{"http://cn.bing.com", "http://www.bing.com"}
+            : new String[]{"https://cn.bing.com", "https://www.bing.com"};
     private static final String BING_PATH = "/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN";
     private static final int TIMEOUT = 15000;
     /** Bing serves 1920x1080 JPEGs; anything larger than this is wasted on a TV. */
@@ -67,6 +75,11 @@ final class Wallpaper {
 void setAutoDaily(boolean on) {
         prefs.edit().putBoolean(KEY_AUTO, on).apply();
 }
+
+    /** True when today's Bing picture is already the one on disk. */
+    boolean isCurrent() {
+        return hasWallpaper() && today().equals(prefs.getString(KEY_LAST_DAY, ""));
+    }
 
     /** True when a picture is already applied. */
     boolean hasWallpaper() {

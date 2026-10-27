@@ -31,6 +31,7 @@
     <string name="bing_daily_hint">每天自动换一张</string>
     <string name="bing_fetching">正在获取今日壁纸…</string>
     <string name="bing_updated">壁纸已更新</string>
+    <string name="bing_current">今天已经是这张壁纸</string>
     <string name="bing_failed">获取失败，请检查网络</string>
     <string name="pick_wallpaper">从电视中选择图片</string>
     <string name="choose_photo">选择图片</string>

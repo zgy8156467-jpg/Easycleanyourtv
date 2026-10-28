@@ -45,9 +45,9 @@ public final class ThickSeekBar extends SeekBar {
         super(context, attrs);
         density = getResources().getDisplayMetrics().density;
         setPadding(0, 0, 0, 0);
-        // Lollipop and up. On KitKat the method does not exist and Dalvik throws
-        // NoSuchMethodError the moment the control centre opens (seen on 4.4 MiTV3S).
-        if (Build.VERSION.SDK_INT >= 21) setSplitTrack(false);
+        // No setSplitTrack: we draw the whole slider in onDraw and never call super.onDraw, so the
+        // platform track is never painted. It was gated on 21+ (KitKat has no such method and
+        // threw NoSuchMethodError opening the control centre), but the call was dead either way.
         setProgressDrawable(new ColorDrawable(Color.TRANSPARENT));
         setThumb(new ColorDrawable(Color.TRANSPARENT));
         setThumbOffset(0);

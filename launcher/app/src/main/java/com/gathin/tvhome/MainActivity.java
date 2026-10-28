@@ -176,6 +176,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private PopupWindow detailPanel;
     /** The update prompt; one at a time, so a slow check cannot stack two. */
     private PopupWindow updatePanel;
+    /** The "turn the Home key service back on" prompt. Dismissed on pause: LeTV EUI left it on
+     *  screen over other apps while the desk itself was behind them. */
+    private PopupWindow a11yPanel;
     /** The unread badge on the control pill and the small notice under it. */
     private View updateDot;
     private View updateBanner;
@@ -287,6 +290,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         live = new WeakReference<>(this);
         density = getResources().getDisplayMetrics().density;
+        // Fallback takeover for TVs whose accessibility switch does not stick; idles when the
+        // accessibility service is enabled. Opening the desk is also how it gets restarted after
+        // the system kills the process.
+        DeskWatchService.start(this);
         // config.xml defaults, then a config.json overlay pushed by tools/theme.sh if one is there.
         cfg = Config.load(this);
         reportCapabilities();
@@ -578,6 +585,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     protected void onPause() {
         super.onPause();
         handler.removeCallbacks(minuteTick);
+        if (a11yPanel != null) a11yPanel.dismiss();
         // Never leave a clip running — or a rotation downloading — behind another app.
         if (stage != null) stage.setPaused(true);
     }
@@ -3077,10 +3085,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      * The TV vendor's own settings, first: on Xiaomi TVs the ADB switch and 账号与安全 live in
      * com.xiaomi.mitv.settings, while AOSP's Settings app — which the standard action resolves to —
      * only has the bare Android pages. Falls back to AOSP when no vendor app is installed.
+     *
+     * <p>Except on MiTV4-ANSM0 / Android 6 (build 8.4.25.413, 2026-10-27): there the vendor
+     * settings are not an app but a popup hosted by PatchWall. It only attaches while PatchWall
+     * is the foreground home; with our desk — or any other app — in front it creates no view and
+     * closes in the same frame, which the user sees as a black flash and "设置打不开". AOSP
+     * Settings opens over anything (measured: Settings, WLAN, display and apps pages all open).
+     * Only this model gets the fallback: MiTV4X runs Android 6 too but its vendor settings is a
+     * real app, and users need the 账号与安全 page there to turn ADB on.
      */
     static Intent tvSettingsIntent(android.content.Context ctx) {
+        Intent standard = new Intent(Settings.ACTION_SETTINGS);
+        if ("xiaomi".equals(DeviceProfile.get(ctx).name)
+                && Build.VERSION.SDK_INT <= Build.VERSION_CODES.M
+                && "MiTV4-ANSM0".equalsIgnoreCase(Build.MODEL)
+                && resolvesReal(ctx, standard)) {
+            return standard;
+        }
         Intent vendor = vendorSettingsIntent(ctx);
-        return vendor != null ? vendor : new Intent(Settings.ACTION_SETTINGS);
+        return vendor != null ? vendor : standard;
     }
 
     /**
@@ -3714,6 +3737,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                     .putBoolean("a11y_jumped", false).apply();
             return;
         }
+        // With usage access granted the desk covers Home by itself (DeskWatchService). On firmware
+        // that switches the accessibility service off on its own, pointing at that switch again is
+        // noise the user cannot act on.
+        if (UsageScan.allowed(this)) return;
         if (a11yPromptedThisRun) return;
         boolean wasOn = prefs.getBoolean("a11y_was_on", false);
         if (!wasOn && prefs.getBoolean("a11y_prompted", false)) return;
@@ -3769,6 +3796,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             open(systemIntent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
         });
         later.setOnClickListener(v -> popup.dismiss());
+        popup.setOnDismissListener(() -> {
+            if (a11yPanel == popup) a11yPanel = null;
+        });
+        a11yPanel = popup;
         popup.showAtLocation(root, Gravity.CENTER, 0, 0);
         panel.post(go::requestFocus);
     }
@@ -3801,6 +3832,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(true);
         go.setOnClickListener(v -> popup.dismiss());
+        popup.setOnDismissListener(() -> {
+            if (a11yPanel == popup) a11yPanel = null;
+        });
+        a11yPanel = popup;
         popup.showAtLocation(root, Gravity.CENTER, 0, 0);
         panel.post(go::requestFocus);
     }
@@ -4999,25 +5034,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     /** Whether the user allowed usage access; without it the recent list reads as empty. */
     private boolean usageAccessGranted() {
-        if (Build.VERSION.SDK_INT < 21) return false;
-        try {
-            AppOpsManager ops = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
-            return ops != null && ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(), getPackageName()) == AppOpsManager.MODE_ALLOWED;
-        } catch (RuntimeException e) {
-            return false;
-        }
+        return UsageScan.allowed(this);
     }
 
     /** The Home-key accessibility service is bound by the system, so its switch is the truth. */
     private boolean homeKeyEnabled() {
-        String enabled = Settings.Secure.getString(getContentResolver(),
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        String on = Settings.Secure.getString(getContentResolver(),
-                Settings.Secure.ACCESSIBILITY_ENABLED);
-        if (enabled == null || !"1".equals(on)) return false;
-        ComponentName cn = new ComponentName(this, HomeKeyService.class);
-        return enabled.contains(cn.flattenToString()) || enabled.contains(cn.flattenToShortString());
+        return HomeKeyService.enabled(this);
     }
 
     /** Whether one of this app's own declared services is listed as running. */

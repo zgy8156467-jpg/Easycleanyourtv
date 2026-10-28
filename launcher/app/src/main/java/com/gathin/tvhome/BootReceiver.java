@@ -17,6 +17,10 @@ public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         final Context app = context.getApplicationContext();
+        DeskWatchService.start(app);
+        // The revive alarm only needs the service back; it must not reopen the desk on top of
+        // whatever the member is watching.
+        if (DeskWatchService.TICK.equals(intent.getAction())) return;
         final Handler handler = new Handler(app.getMainLooper());
         for (long delay : new long[]{1500, 4000}) {
             handler.postDelayed(new Runnable() {

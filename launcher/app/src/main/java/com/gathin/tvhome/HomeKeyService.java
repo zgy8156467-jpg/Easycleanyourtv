@@ -1,6 +1,8 @@
 package com.gathin.tvhome;
 
 import android.accessibilityservice.AccessibilityService;
+import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.PowerManager;
@@ -193,6 +195,22 @@ public class HomeKeyService extends AccessibilityService {
      */
     static void suppressTakeover(long millis) {
         suppressUntil = android.os.SystemClock.elapsedRealtime() + millis;
+    }
+
+    /** Until when takeover is suppressed; {@link DeskWatchService} has to respect it too. */
+    static long suppressedUntil() {
+        return suppressUntil;
+    }
+
+    /** Whether the user turned this service on in Settings &gt; Accessibility. */
+    static boolean enabled(Context ctx) {
+        String enabled = android.provider.Settings.Secure.getString(ctx.getContentResolver(),
+                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        String on = android.provider.Settings.Secure.getString(ctx.getContentResolver(),
+                android.provider.Settings.Secure.ACCESSIBILITY_ENABLED);
+        if (enabled == null || !"1".equals(on)) return false;
+        ComponentName cn = new ComponentName(ctx, HomeKeyService.class);
+        return enabled.contains(cn.flattenToString()) || enabled.contains(cn.flattenToShortString());
     }
 
     /**

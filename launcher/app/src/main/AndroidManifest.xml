@@ -30,6 +30,8 @@
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
+    <!-- DeskWatchService runs in the foreground from Android 8 on. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <!-- A launcher is the app list: without this Android 11+ only shows us packages we happen to
          name, and vendor file managers and app stores would disappear from the grid. -->
@@ -136,6 +138,9 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <!-- Revive alarm: brings DeskWatchService back after the vendor cleaner killed the
+                     process. Explicit component, so no one else can send it. -->
+                <action android:name="com.gathin.tvhome.WATCH_TICK" />
             </intent-filter>
         </receiver>
 
@@ -168,5 +173,17 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/home_key_service" />
         </service>
+
+        <!-- Same takeover without accessibility, for firmware that switches the service off by
+             itself (LeTV EUI). Idles whenever HomeKeyService is enabled. See DeskWatchService. -->
+        <service
+            android:name=".DeskWatchService"
+            android:exported="false" />
+        <!-- Persisted job that starts DeskWatchService after a reboot on firmware that filters
+             BOOT_COMPLETED. API 21+; nothing is scheduled on older builds. -->
+        <service
+            android:name=".DeskWatchJob"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
     </application>
 </manifest>

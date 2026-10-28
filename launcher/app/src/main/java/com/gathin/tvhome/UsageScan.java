@@ -67,6 +67,20 @@ final class UsageScan {
         return out.size() > limit ? new ArrayList<>(out.subList(0, limit)) : out;
     }
 
+    /** Whether the user allowed usage access for this app; the scan reads nothing without it. */
+    static boolean allowed(Context ctx) {
+        if (android.os.Build.VERSION.SDK_INT < 21) return false;
+        try {
+            android.app.AppOpsManager ops =
+                    (android.app.AppOpsManager) ctx.getSystemService(Context.APP_OPS_SERVICE);
+            return ops != null && ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    android.os.Process.myUid(), ctx.getPackageName())
+                    == android.app.AppOpsManager.MODE_ALLOWED;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     static List<Event> foregroundEvents(Context ctx, long from, long to) {
         List<Event> out = new ArrayList<>();
         if (android.os.Build.VERSION.SDK_INT < 21) return out;

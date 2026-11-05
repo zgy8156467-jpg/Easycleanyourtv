@@ -4,10 +4,13 @@ import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.SystemClock;
 
@@ -26,8 +29,17 @@ public class DeskWatchService extends Service {
     /** Sent to {@link BootReceiver} by the revive alarm. */
     static final String TICK = "com.gathin.tvhome.WATCH_TICK";
     private static final long REVIVE_MS = 5 * 60 * 1000L;
-    private final Handler handler = new Handler();
+    /**
+     * The scan runs off the main thread. {@code getRunningServices()} below walks every service in
+     * the system and took 753ms during an app switch; on the main thread it also delays the
+     * accessibility key filter, and every remote key waits for that answer.
+     */
+    private HandlerThread pollThread;
+    private Handler handler;
     private long lastUsageCheck = 0;
+    /** The bound-service check is a heavy binder call; five seconds is plenty for a kill signal. */
+    private long lastLiveCheck = -100_000;
+    private boolean a11yLive;
     private long lastTakeover = 0;
     /** The same stock-desktop event would be handed back by the one-second overlap; act once. */
     private String lastActedKey = "";
@@ -41,13 +53,51 @@ public class DeskWatchService extends Service {
     private static boolean reportedStart, reportedIdle, reportedCover, reportedSeen;
 
     static void start(Context ctx) {
-        // Usage stats is a 5.0 API; older builds only have the accessibility path.
-        if (Build.VERSION.SDK_INT < 21) return;
+        // Usage stats is a 5.0 API. Before that the Home broadcast below is the only signal that
+        // survives LeTV eUI dropping our accessibility service; the service is still worth running.
+        if (Build.VERSION.SDK_INT < 21) {
+            try {
+                ctx.startService(new Intent(ctx, DeskWatchService.class));
+            } catch (RuntimeException ignored) {
+            }
+            scheduleRevive(ctx);
+            return;
+        }
         // Persisted job: the boot path on firmware that filters BOOT_COMPLETED.
         DeskWatchJob.schedule(ctx);
         scheduleRevive(ctx);
         if (Build.VERSION.SDK_INT >= 26) DeskWatchNotify.start(ctx);
         else ctx.startService(new Intent(ctx, DeskWatchService.class));
+    }
+
+    /**
+     * Android closes system dialogs before it brings the desktop up, and that broadcast carries
+     * the reason "homekey". It is the one Home signal a pre-5.0 TV gives an app that is not the
+     * default desktop and has no accessibility binding — LeTV eUI switches the service off as soon
+     * as the user leaves its settings page. The broadcast reaches us while the stock desktop is
+     * still starting, so the desk lands on top of it.
+     */
+    private final BroadcastReceiver homeKey = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!Intent.ACTION_CLOSE_SYSTEM_DIALOGS.equals(intent.getAction())) return;
+            if (!"homekey".equals(intent.getStringExtra("reason"))) return;
+            if (SystemClock.elapsedRealtime() <= HomeKeyService.suppressedUntil()) return;
+            showDesk();
+        }
+    };
+    private boolean homeKeyRegistered;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        pollThread = new HandlerThread("desk-watch");
+        pollThread.start();
+        handler = new Handler(pollThread.getLooper());
+        if (Build.VERSION.SDK_INT < 21) {
+            registerReceiver(homeKey, new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+            homeKeyRegistered = true;
+        }
     }
 
     /**
@@ -89,7 +139,7 @@ public class DeskWatchService extends Service {
             Errors.record("desk-watch", "service started");
         }
         handler.removeCallbacks(poll);
-        handler.post(poll);
+        if (Build.VERSION.SDK_INT >= 21) handler.post(poll);
         return START_STICKY;
     }
 
@@ -100,7 +150,18 @@ public class DeskWatchService extends Service {
 
     @Override
     public void onDestroy() {
-        handler.removeCallbacks(poll);
+        if (handler != null) handler.removeCallbacks(poll);
+        if (pollThread != null) {
+            // quitSafely is API 18; the legacy build still reaches 14.
+            if (Build.VERSION.SDK_INT >= 18) pollThread.quitSafely();
+            else pollThread.quit();
+            pollThread = null;
+            handler = null;
+        }
+        if (homeKeyRegistered) {
+            unregisterReceiver(homeKey);
+            homeKeyRegistered = false;
+        }
         super.onDestroy();
     }
 
@@ -115,10 +176,19 @@ public class DeskWatchService extends Service {
     };
 
     private void scan() {
-        if (HomeKeyService.enabled(this) || !UsageScan.allowed(this)) {
+        // The switch alone is not enough: MIUI leaves it on after killing the service, and a dead
+        // accessibility service covers nothing. Only a bound one earns this watcher's silence.
+        // The binding changes only when the service dies or comes back, so checking it every scan
+        // (5x a second) just burns binder calls; five seconds is fast enough to notice.
+        long uptime = SystemClock.elapsedRealtime();
+        if (uptime - lastLiveCheck > 5000) {
+            lastLiveCheck = uptime;
+            a11yLive = HomeKeyService.enabled(this) && HomeKeyService.running(this);
+        }
+        if (a11yLive || !UsageScan.allowed(this)) {
             if (!reportedIdle) {
                 reportedIdle = true;
-                Errors.record("desk-watch", HomeKeyService.enabled(this)
+                Errors.record("desk-watch", a11yLive
                         ? "idle: accessibility on" : "idle: no usage access");
             }
             lastUsageCheck = 0;

@@ -10,6 +10,7 @@ import android.graphics.Shader;
 import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
@@ -54,25 +55,32 @@ public class WallpaperStage extends FrameLayout {
 
     private final ImageView base = new ImageView(getContext());
     /**
-     * Weather loop, under the poster layer and above the still wallpaper.
+     * The downloaded dynamic wallpaper, under the poster layer and above the still wallpaper.
      *
      * <p>A SurfaceView, not a TextureView: this TV's media stack (MiPlayer over the Amlogic decoder)
-     * sends every frame of a raw-resource clip to the hardware video plane, and the SurfaceTexture of
-     * a TextureView only ever receives black. Playback looked healthy — 24 fps, frames arriving — while
-     * the desk stayed black underneath. The plane is exactly what a SurfaceView is composited from, so
-     * the loop goes there. It cannot be faded (SurfaceView ignores alpha), so it is shown and hidden
-     * instead of cross-faded.
+     * only ever hands a SurfaceTexture black frames. The plane is exactly what a SurfaceView is
+     * composited from, so the loop goes there. It cannot be faded (SurfaceView ignores alpha), so it
+     * is shown and hidden instead of cross-faded.
      */
-    private final SurfaceView weatherLayer = new SurfaceView(getContext());
-    private MediaPlayer weatherPlayer;
-    private int weatherRes;
-    /** A resource that failed to prepare on this box; retrying it every weather tick only spams. */
-    private int weatherFailedRes;
-    private boolean weatherSurfaceReady;
+    private final SurfaceView videoLayer = new SurfaceView(getContext());
+    private MediaPlayer videoPlayer;
+    /**
+     * Player teardown runs here. On this firmware {@code release()} can block in the media server
+     * for seconds, and when the desk goes to the background that call lands on the main thread —
+     * which also filters every remote key event. A 753ms block was already visible during an app
+     * switch; a longer one leaves the whole remote dead until reboot.
+     */
+    private final HandlerThread playerThread = new HandlerThread("tvhome-loop-player");
+    private final Handler playerHandler;
+    private java.io.File loopFile;
+    private java.io.File loopFailedFile;
+    private boolean videoSurfaceReady;
     /** Failed starts in a row; a surface that is not ready yet deserves one more go, a dead loop not. */
-    private int weatherRetries;
-    private final Runnable startWeather = () -> {
-        if (weatherSurfaceReady && weatherPlayer == null && weatherRes != 0) playWeather(weatherRes);
+    private int videoRetries;
+    private final Runnable startLoop = () -> {
+        if (videoSurfaceReady && videoPlayer == null && loopFile != null) {
+            playLoop();
+        }
     };
     private final ImageView poster = new ImageView(getContext());
     private final Paint scrim = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -90,12 +98,36 @@ public class WallpaperStage extends FrameLayout {
     private int videoState = IDLE;
     /** The desk is not on screen: no rotation, no downloads, no clip. */
     private boolean paused;
-    /** A poster trailer has the decoder; the weather loop stays quiet until it lets go. */
+    /** Safe boot: no posters, trailers, loops or Ken Burns — only the still wallpaper. */
+    private boolean plainMode;
+    /** A poster trailer has the decoder; the wallpaper loop stays quiet until it lets go. */
     private boolean decoderBusy;
 
     private int defaultGen, posterGen;
     private Bitmap defaultBmp, posterBmp;
     private String posterPkg;
+
+    /**
+     * Bring the wallpaper loop back once the clip has let go of the decoder.
+     *
+     * <p>MiPlayer silently refuses to decode into a video plane a released player has already
+     * used: the next prepare succeeds and reports the right size, then no frame ever reaches the
+     * screen and the desk is black. Handing the plane back — drop it, let the holder make a new
+     * one — is what the wallpaper switch does when the user toggles it, so the loop comes back
+     * the same way.
+     */
+    private final Runnable restartLoop = () -> {
+        if (loopFile == null) return;
+        if (videoPlayer != null) {
+            syncVideoPlayback();
+            return;
+        }
+        videoSurfaceReady = false;
+        videoLayer.setVisibility(INVISIBLE);
+        main.postDelayed(() -> {
+            if (loopFile != null && !paused) videoLayer.setVisibility(VISIBLE);
+        }, 30);
+    };
 
     private final Runnable rotate = new Runnable() {
         @Override
@@ -121,33 +153,40 @@ public class WallpaperStage extends FrameLayout {
             // Nothing to search for (untitled legacy still): skip the lookup, keep the Ken Burns.
             if (p.title.isEmpty() && (p.bvid == null || p.bvid.isEmpty())) return;
             videoState = RESOLVING;
+            // The box has one decoder: hand it over completely. A paused loop still holds it and
+            // the clip dies with -10006 (and takes the loop down with it).
+            stopVideoPlayer();
+            syncVideoPlayback();
             trailer.play(HotPosters.sourceFor(posterPkg), list.get(i));
         }
     };
 
     public WallpaperStage(Context context, AttributeSet attrs) {
         super(context, attrs);
+        playerThread.start();
+        playerHandler = new Handler(playerThread.getLooper());
         if (store == null) store = new HotPosters(context);
         base.setScaleType(ImageView.ScaleType.CENTER_CROP);
         addView(base, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-        weatherLayer.setVisibility(INVISIBLE);
-        addView(weatherLayer, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-        weatherLayer.getHolder().addCallback(new SurfaceHolder.Callback() {
+        videoLayer.setVisibility(INVISIBLE);
+        addView(videoLayer, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        videoLayer.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
-                weatherSurfaceReady = true;
-                if (weatherRes != 0 && weatherPlayer == null) {
+                videoSurfaceReady = true;
+                if (loopFile != null && videoPlayer == null) {
                     // Not straight away: at a cold start the window is still settling, and MiPlayer
                     // fails with -38 (ENOSYS) if the loop starts before the video layer is handed over.
-                    // Half a second behind the desk is invisible; the still wallpaper is already up.
-                    main.removeCallbacks(startWeather);
-                    main.postDelayed(startWeather, 700);
+                    // A miss now costs one of the three retries, not the wallpaper, so this waits just
+                    // long enough to usually land on the first try.
+                    main.removeCallbacks(startLoop);
+                    main.postDelayed(startLoop, 400);
                 }
             }
 
             @Override
             public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-                fitWeather();
+                fitVideo();
             }
 
             @Override
@@ -155,8 +194,8 @@ public class WallpaperStage extends FrameLayout {
                 // The window went away (another app, or the panel hid the desk). Releasing now is
                 // the safe move: MiPlayer refuses to decode into a second surface once a player
                 // has had one, and answers -10002 instead. A fresh player comes up on return.
-                weatherSurfaceReady = false;
-                stopWeatherPlayer();
+                videoSurfaceReady = false;
+                stopVideoPlayer();
             }
         });
         // Under the poster: it prepares and shows behind an opaque still, so no black flash.
@@ -164,7 +203,7 @@ public class WallpaperStage extends FrameLayout {
             @Override
             public void onStarted() {
                 videoState = PLAYING;
-                syncWeatherPlayback();
+                syncVideoPlayback();
                 // The texture needs a frame or two before it reaches the screen; hiding the
                 // poster right away would flash the wallpaper in between.
                 main.postDelayed(() -> {
@@ -175,8 +214,10 @@ public class WallpaperStage extends FrameLayout {
             @Override
             public void onFinished() {
                 videoState = DONE;
-                syncWeatherPlayback();
+                syncVideoPlayback();
                 if (posterBmp != null) poster.setAlpha(1f);
+                main.removeCallbacks(restartLoop);
+                main.postDelayed(restartLoop, 500);
                 if (rotatePending) {
                     rotatePending = false;
                     main.post(WallpaperStage.this::rotateNow);
@@ -185,9 +226,15 @@ public class WallpaperStage extends FrameLayout {
 
             @Override
             public void onDecoderBusy(boolean busy) {
-                // The panel decodes one clip at a time: the weather loop yields to a poster trailer.
+                // The box has one decoder: while a clip has it the loop stays released, and it is
+                // rebuilt once the clip lets go. The trailer resets its player on its own thread,
+                // so give it a moment before asking for the decoder back.
                 decoderBusy = busy;
-                syncWeatherPlayback();
+                syncVideoPlayback();
+                if (!busy) {
+                    main.removeCallbacks(restartLoop);
+                    main.postDelayed(restartLoop, 500);
+                }
             }
         });
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -198,6 +245,15 @@ public class WallpaperStage extends FrameLayout {
 
     void setPosterListener(PosterListener l) {
         listener = l;
+    }
+
+    /** Strip everything that decodes video or animates; used by the boot guard's safe mode. */
+    void setPlain(boolean on) {
+        plainMode = on;
+        if (on) {
+            clearLoop();
+            clearPoster();
+        }
     }
 
     // ---- default wallpaper -----------------------------------------------------------------------
@@ -227,116 +283,142 @@ public class WallpaperStage extends FrameLayout {
         return defaultBmp != null;
     }
 
-    // ---- weather loop ----------------------------------------------------------------------------
+    // ---- dynamic wallpaper loop ------------------------------------------------------------------
 
-    /**
-     * Play one of the bundled weather loops behind the desk, or 0 for the still wallpaper again.
-     * The clips are silent and loop on the player itself, so nothing here needs a timer.
-     */
-    void setWeatherVideo(int res) {
-        if (res == 0) {
-            clearWeatherVideo();
+    /** Play a downloaded clip, or null for the still wallpaper. */
+    void setLoop(java.io.File file) {
+        if (plainMode) return;
+        if (file == null) {
+            clearLoop();
             return;
         }
-        if (res == weatherFailedRes) return;   // this loop cannot decode here; keep the still wallpaper
-        if (res == weatherRes && (weatherPlayer != null || !weatherSurfaceReady)) return;
-        playWeather(res);
+        boolean same = file.equals(loopFile);
+        if (same && (videoPlayer != null || !videoSurfaceReady)) return;
+        loopFile = file;
+        // The wallpaper owns the decoder: poster trailers stop and their slices go, as asked.
+        main.removeCallbacks(playClip);
+        trailer.stop();
+        trailer.clearCache();
+        videoState = IDLE;
+        clearPoster();
+        playLoop();
     }
 
-    /** Explicitly off (or a new reading): let a previously failed loop try once more. */
-    void clearWeatherVideo() {
-        weatherRes = 0;
-        weatherFailedRes = 0;
-        stopWeatherPlayer();
-        weatherLayer.setVisibility(INVISIBLE);
+    /** Explicitly off: stop the clip and let the poster trailers come back. */
+    void clearLoop() {
+        loopFile = null;
+        loopFailedFile = null;
+        // Leaving the desk: onStop lands here, so the media server gets its own thread.
+        stopVideoPlayer(true);
+        videoLayer.setVisibility(INVISIBLE);
+        scheduleTimers();
     }
 
-    boolean hasWeather() {
-        return weatherRes != 0 || weatherPlayer != null;
+    boolean hasLoop() {
+        return loopFile != null || videoPlayer != null;
+    }
+
+    /** Drop the cached trailer slices; used when the desk is left or a wallpaper loop takes over. */
+    void clearTrailerCache() {
+        trailer.clearCache();
     }
 
     /**
      * The surface has to be set before the file is handed to the player. MIUI's own media stack
      * (MiPlayer, which replaces MediaPlayer on these TV boxes) picks its output when it prepares;
-     * a surface attached afterwards is ignored and the loop decodes into nothing, which is the black
-     * "on" weather wallpaper several MiTVs reported. {@link PosterTrailer} already works around the
-     * same stack, so this follows its order: surface, then data, then prepareAsync.
+     * a surface attached afterwards is ignored and the loop decodes into nothing. {@link PosterTrailer}
+     * already works around the same stack, so this follows its order: surface, then data, then prepare.
      */
-    private void playWeather(final int res) {
-        weatherRes = res;
-        weatherLayer.setVisibility(VISIBLE);
-        if (!weatherSurfaceReady) return;   // the holder callback starts it when the surface is ready
-        Surface s = weatherLayer.getHolder().getSurface();
+    private void playLoop() {
+        final java.io.File file = loopFile;
+        if (file == null) return;
+        videoLayer.setVisibility(VISIBLE);
+        if (!videoSurfaceReady) return;   // the holder callback starts it when the surface is ready
+        Surface s = videoLayer.getHolder().getSurface();
         if (s == null || !s.isValid()) return;
-        stopWeatherPlayer();
+        if (Build.VERSION.SDK_INT >= 30) {
+            // Ask the compositor for the rate the user picked; older boxes only ever follow the file.
+            float rate = FrameRate.videoRate(getContext());
+            if (rate > 0) s.setFrameRate(rate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+        }
+        stopVideoPlayer();
         final MediaPlayer mp;
         try {
             mp = new MediaPlayer();
             mp.setLooping(true);
             mp.setVolume(0f, 0f);
             mp.setSurface(s);
-            android.content.res.AssetFileDescriptor afd =
-                    getContext().getResources().openRawResourceFd(res);
-            if (afd == null) throw new java.io.IOException("no raw resource " + res);
-            mp.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
-            afd.close();
+            mp.setDataSource(file.getPath());
         } catch (Exception e) {
-            weatherRes = 0;
-            weatherFailedRes = res;
-            android.util.Log.w("TvHome.Stage", "weather source failed: " + e);
+            loopFile = null;
+            loopFailedFile = file;
+            android.util.Log.w("TvHome.Stage", "loop source failed: " + e);
             return;
         }
-        mp.setOnVideoSizeChangedListener((m, w, h) -> fitWeather());
+        mp.setOnVideoSizeChangedListener((m, w, h) -> fitVideo());
         mp.setOnErrorListener((m, what, extra) -> {
-            android.util.Log.w("TvHome.Stage", "weather error " + what + "/" + extra);
-            if (m != weatherPlayer) return true;   // a released player; the current one is untouched
-            stopWeatherPlayer();
+            android.util.Log.w("TvHome.Stage", "loop error " + what + "/" + extra);
+            if (m != videoPlayer) return true;   // a released player; the current one is untouched
+            stopVideoPlayer();
             // MiPlayer answers -38 (ENOSYS) when the loop starts before the window has finished
-            // handing the video plane over, which is what a cold start does, and 100 when the
-            // media server restarts. The same clip plays fine a moment later, so those two get
-            // another go before it is written off.
-            if ((what == -38 || what == MediaPlayer.MEDIA_ERROR_SERVER_DIED) && weatherRetries < 2) {
-                weatherRetries++;
-                weatherLayer.setVisibility(VISIBLE);
-                main.removeCallbacks(startWeather);
-                main.postDelayed(startWeather, 1500);
+            // handing the video plane over, which is what a cold start does; 100 when the media
+            // server restarts; and -10006 / -10002 while a poster trailer is still letting go of
+            // the one decoder. The same clip plays fine a moment later, so any of them gets a few
+            // more goes. loopFile is kept even when they run out: the next focus change retries,
+            // where clearing it left the desk without a wallpaper until the user toggled it.
+            if (videoRetries < 3) {
+                videoRetries++;
+                videoLayer.setVisibility(VISIBLE);
+                main.removeCallbacks(startLoop);
+                main.postDelayed(startLoop, 1200);
             } else {
-                // Do not call clearWeatherVideo(): that resets the failed mark and the next weather
-                // tick retries the same undecodable loop.
-                weatherFailedRes = res;
-                weatherRes = 0;
-                weatherLayer.setVisibility(INVISIBLE);
+                videoRetries = 0;
+                loopFailedFile = file;
+                videoLayer.setVisibility(INVISIBLE);
+                Errors.record("loop", "decode " + what + "/" + extra);
             }
             return true;
         });
         mp.setOnPreparedListener(m -> {
-            android.util.Log.i("TvHome.Stage", "weather prepared " + m.getVideoWidth() + "x"
+            android.util.Log.i("TvHome.Stage", "loop prepared " + m.getVideoWidth() + "x"
                     + m.getVideoHeight());
             // Toggled off while preparing: the player is already released.
-            if (weatherPlayer != m) return;
-            weatherRetries = 0;
+            if (videoPlayer != m) return;
+            videoRetries = 0;
             try {
-                syncWeatherPlayback();
+                syncVideoPlayback();
             } catch (Exception e) {
-                android.util.Log.w("TvHome.Stage", "weather start: " + e);
+                android.util.Log.w("TvHome.Stage", "loop start: " + e);
             }
-            fitWeather();
+            fitVideo();
         });
-        weatherPlayer = mp;
+        videoPlayer = mp;
         try {
             mp.prepareAsync();
         } catch (Exception e) {
-            weatherRes = 0;
-            weatherFailedRes = res;
-            android.util.Log.w("TvHome.Stage", "weather prepare failed: " + e);
-            stopWeatherPlayer();
+            loopFile = null;
+            loopFailedFile = file;
+            android.util.Log.w("TvHome.Stage", "loop prepare failed: " + e);
+            stopVideoPlayer();
         }
     }
 
-    private void stopWeatherPlayer() {
-        MediaPlayer mp = weatherPlayer;
-        weatherPlayer = null;
-        if (mp != null) {
+    private void stopVideoPlayer() {
+        stopVideoPlayer(false);
+    }
+
+    /**
+     * @param offMain true when the desk is leaving the screen. {@code release()} then runs on the
+     *                player thread: blocking the main thread there stalls the accessibility key
+     *                filter, and with it every remote button. playLoop keeps the synchronous path
+     *                so a new player is only built after the old one has really let go of the
+     *                decoder this TV shares.
+     */
+    private void stopVideoPlayer(boolean offMain) {
+        MediaPlayer mp = videoPlayer;
+        videoPlayer = null;
+        if (mp == null) return;
+        Runnable release = () -> {
             try {
                 mp.setSurface(null);
             } catch (Exception ignored) {
@@ -345,12 +427,14 @@ public class WallpaperStage extends FrameLayout {
                 mp.release();
             } catch (Exception ignored) {
             }
-        }
+        };
+        if (offMain) playerHandler.post(release);
+        else release.run();
     }
 
     /** Paused in the background, and under a poster trailer so two decoders never fight on a 1 GB box. */
-    private void syncWeatherPlayback() {
-        MediaPlayer mp = weatherPlayer;
+    private void syncVideoPlayback() {
+        MediaPlayer mp = videoPlayer;
         if (mp == null) return;
         boolean play = !paused && !decoderBusy
                 && videoState != PLAYING && videoState != RESOLVING;
@@ -368,8 +452,8 @@ public class WallpaperStage extends FrameLayout {
      * The loops are 16:9 and so is every TV panel this runs on, so the decoder's own fit fills the
      * SurfaceView; cropping is only asked for in case a panel is not.
      */
-    private void fitWeather() {
-        MediaPlayer mp = weatherPlayer;
+    private void fitVideo() {
+        MediaPlayer mp = videoPlayer;
         if (mp == null) return;
         try {
             mp.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING);
@@ -381,6 +465,10 @@ public class WallpaperStage extends FrameLayout {
 
     /** Show the poster set for this app; apps without a source fall back to the default wallpaper. */
     public void showForPackage(String pkg) {
+        if (plainMode) {
+            clearPoster();
+            return;
+        }
         final String source = HotPosters.sourceFor(pkg);
         if (source == null) {
             clearPoster();
@@ -392,7 +480,7 @@ public class WallpaperStage extends FrameLayout {
         browsing = false;
         rotatePending = false;
         videoState = IDLE;
-        syncWeatherPlayback();
+        syncVideoPlayback();
         final int gen = ++posterGen;
         main.removeCallbacks(rotate);
         main.removeCallbacks(playClip);
@@ -472,7 +560,7 @@ public class WallpaperStage extends FrameLayout {
         main.removeCallbacks(playClip);
         trailer.stop();
         videoState = IDLE;
-        syncWeatherPlayback();
+        syncVideoPlayback();
         if (posterBmp != null) poster.setAlpha(1f);
         final int gen = ++posterGen;
         display(list.get(index), index, gen);
@@ -501,7 +589,7 @@ public class WallpaperStage extends FrameLayout {
             main.removeCallbacks(playClip);
             trailer.stop();
             videoState = IDLE;
-            syncWeatherPlayback();
+            syncVideoPlayback();
             rotatePending = false;
             if (posterBmp != null) poster.setAlpha(1f);
         } else {
@@ -523,7 +611,7 @@ public class WallpaperStage extends FrameLayout {
         } else {
             scheduleTimers();
         }
-        syncWeatherPlayback();
+        syncVideoPlayback();
     }
 
     void stopVideo() {
@@ -531,7 +619,7 @@ public class WallpaperStage extends FrameLayout {
         trailer.stop();
         videoState = IDLE;
         if (posterBmp != null) poster.setAlpha(1f);
-        syncWeatherPlayback();
+        syncVideoPlayback();
     }
 
     /** Window focus came back while a dock tile is still selected. */
@@ -548,7 +636,7 @@ public class WallpaperStage extends FrameLayout {
         main.removeCallbacks(playClip);
         trailer.stop();
         videoState = IDLE;
-        syncWeatherPlayback();
+        syncVideoPlayback();
         if (posterBmp != null) poster.setAlpha(1f);
         final int gen = ++posterGen;
         int next = (posterIndex + 1) % list.size();
@@ -559,6 +647,7 @@ public class WallpaperStage extends FrameLayout {
     private void scheduleTimers() {
         main.removeCallbacks(rotate);
         main.removeCallbacks(playClip);
+        if (paused) return;
         if (posterPkg == null || list.isEmpty()) return;
         if (list.size() > 1) main.postDelayed(rotate, ROTATE_MS);
         // Fetch during the three seconds the poster is on its own, not after them. A dot with focus
@@ -578,7 +667,9 @@ public class WallpaperStage extends FrameLayout {
         main.removeCallbacks(playClip);
         trailer.stop();
         videoState = IDLE;
-        syncWeatherPlayback();
+        syncVideoPlayback();
+        main.removeCallbacks(restartLoop);
+        main.postDelayed(restartLoop, 500);
         browsing = false;
         rotatePending = false;
         list = Collections.emptyList();
@@ -683,7 +774,7 @@ public class WallpaperStage extends FrameLayout {
         posterGen++;
         main.removeCallbacks(rotate);
         main.removeCallbacks(playClip);
-        clearWeatherVideo();
+        clearLoop();
         trailer.release();
         posterPkg = null;
         list = Collections.emptyList();
@@ -697,6 +788,9 @@ public class WallpaperStage extends FrameLayout {
     public void dispose() {
         release();
         trailer.dispose();
+        // quitSafely is API 18; the legacy build still reaches 14.
+        if (Build.VERSION.SDK_INT >= 18) playerThread.quitSafely();
+        else playerThread.quit();
     }
 
     private void notifyShown() {
@@ -763,7 +857,7 @@ public class WallpaperStage extends FrameLayout {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        fitWeather();
+        fitVideo();
         topScrim = new LinearGradient(0, 0, 0, h * 0.32f,
                 0xC2000000, 0x00000000, Shader.TileMode.CLAMP);
         bottomScrim = new LinearGradient(0, h * 0.66f, 0, h,

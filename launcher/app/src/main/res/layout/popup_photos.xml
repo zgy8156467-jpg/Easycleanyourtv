@@ -1,34 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The local picture grid. The system photo picker on an Android 14 TV is touch only, so this
-     panel is what the remote can actually drive. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- The local picture / clip grid. ScrollView root so glassPanel's height cap scrolls instead of
+     clipping: the dynamic wallpaper library is 25 cells tall and the remote must reach them all. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/panel"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:background="@drawable/glass_panel"
+    android:background="@drawable/liquid_glass_panel"
     android:padding="6dp"
+    android:scrollbars="none"
+    android:focusable="false"
+    android:descendantFocusability="afterDescendants"
     android:elevation="12dp">
 
-    <TextView
-        android:id="@+id/photosTitle"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingLeft="10dp"
-        android:paddingStart="10dp"
-        android:paddingRight="10dp"
-        android:paddingEnd="10dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp"
-        android:textColor="#D9FFFFFF"
-        android:textSize="13sp"
-        android:textAllCaps="false"
-        android:fontFamily="@font/outfit"
-        android:fontVariationSettings="'wght' 600" />
-
     <LinearLayout
-        android:id="@+id/photoRows"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical" />
-</LinearLayout>
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/photosTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingLeft="10dp"
+            android:paddingStart="10dp"
+            android:paddingRight="10dp"
+            android:paddingEnd="10dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:textColor="#E6111114"
+            android:textSize="13sp"
+            android:textAllCaps="false"
+            android:fontFamily="@font/outfit"
+            android:fontVariationSettings="'wght' 600" />
+
+        <!-- Rows above the grid, used by the local wallpaper page for USB import and delete. -->
+        <LinearLayout
+            android:id="@+id/photoActions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <LinearLayout
+            android:id="@+id/photoRows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </LinearLayout>
+</ScrollView>

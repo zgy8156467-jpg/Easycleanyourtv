@@ -512,6 +512,21 @@ final class PosterTrailer {
         });
     }
 
+    /**
+     * Stop the clip and drop every cached slice. Called when the desk switches to a downloaded
+     * loop (one decoder, no poster trailers on top) and when the desk is left for another app.
+     */
+    void clearCache() {
+        stop();
+        prefetched = null;
+        File[] files = new File(video.getContext().getCacheDir(), "trailers").listFiles();
+        if (files == null) return;
+        for (File f : files) {
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+    }
+
     /** Shut down for good, when the activity is destroyed. The trailer cannot play after this. */
     void dispose() {
         if (disposed) return;

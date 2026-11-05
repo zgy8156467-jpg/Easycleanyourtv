@@ -755,11 +755,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         dockBoundWidth = parentW;
         int screenW = parentW > 0
                 ? parentW : ctx.getResources().getDisplayMetrics().widthPixels;
-        int bandPad = Math.round(14 * density);
         int gap = Math.round(14 * density);
-        int normal = tileWidthPx(screenW, columns, density);
-        int fit = Math.max(1, (screenW - 2 * bandPad - (capacity - 1) * gap) / capacity);
-        int w = Math.min(normal, fit);
+        int w = dockTileWidthPx(screenW, columns, capacity, density);
         int ht = tileHeightPx(w);
 
         for (int i = 0; i < capacity; i++) {
@@ -776,6 +773,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // These tiles are inflated here rather than by Holder, so the holder's round clip has
             // to be applied by hand or the dock banners paint square corners over the tile.
             clipToCorners(card, density);
+            FocusFx.attach(card);
             card.setScaleX(card.isFocused() ? FOCUS_SCALE : 1f);
             card.setScaleY(card.isFocused() ? FOCUS_SCALE : 1f);
 
@@ -831,6 +829,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                             .setInterpolator(new OvershootInterpolator(focused ? 1.6f : 0f))
                             .start();
                 }
+                FocusFx.onFocus(view, focused);
                 if (focused && listener != null) listener.onDockFocused(index, e, view);
             });
             card.setOnKeyListener((view, keyCode, event) -> {
@@ -847,6 +846,16 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             lp.rightMargin = i == capacity - 1 ? 0 : gap;
             row.addView(tile, lp);
         }
+        // One line per process if a full dock really is wider than the row: the report from the
+        // field ("the dock hangs off both sides") could not be reproduced from the maths alone.
+        row.post(() -> {
+            View band = (View) row.getParent();
+            View root = (View) h.itemView;
+            if (band != null && root.getWidth() > 0 && band.getWidth() > root.getWidth()) {
+                Errors.record("dock", "overflow " + band.getWidth() + ">" + root.getWidth()
+                        + " slots=" + capacity);
+            }
+        });
     }
 
     /** True when the dock was sized for something other than the width the grid has now. */
@@ -865,12 +874,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         LinearLayout row = (LinearLayout) rowView;
         float density = ctx.getResources().getDisplayMetrics().density;
         int capacity = dock.capacity();
-        int screenW = parent.getWidth();
-        int bandPad = Math.round(14 * density);
+        int screenW = dockItem.getWidth() > 0 ? dockItem.getWidth() : parent.getWidth();
         int gap = Math.round(14 * density);
-        int normal = tileWidthPx(screenW, columns, density);
-        int fit = Math.max(1, (screenW - 2 * bandPad - (capacity - 1) * gap) / capacity);
-        int w = Math.min(normal, fit);
+        int w = dockTileWidthPx(screenW, columns, capacity, density);
         int ht = tileHeightPx(w);
         List<String> pinned = dock.apps();
         for (int i = 0; i < row.getChildCount(); i++) {
@@ -895,8 +901,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static int dockTileWidthPx(int screenWidthPx, int columns, int capacity, float density) {
         int bandPad = Math.round(14 * density);
         int gap = Math.round(14 * density);
+        // A focused tile grows by FOCUS_SCALE around its centre, so the first and last slot need
+        // that half-growth as margin or their corners are cut by the screen edges. With the band
+        // sized to exactly the width, a full dock looked like it hung off both sides.
+        int edge = Math.round(8 * density);
         int normal = tileWidthPx(screenWidthPx, columns, density);
-        int fit = Math.max(1, (screenWidthPx - 2 * bandPad - (capacity - 1) * gap) / capacity);
+        int fit = Math.max(1, (screenWidthPx - 2 * (bandPad + edge) - (capacity - 1) * gap) / capacity);
         return Math.min(normal, fit);
     }
 
@@ -1130,6 +1140,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             name = v.findViewById(R.id.name);
             final float density = v.getResources().getDisplayMetrics().density;
             clipToCorners(card, density);
+            FocusFx.attach(card);
             card.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
                 if (keyCode != KeyEvent.KEYCODE_DPAD_UP && keyCode != KeyEvent.KEYCODE_DPAD_DOWN) return false;
@@ -1138,6 +1149,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             });
             card.setOnFocusChangeListener((view, focused) -> {
                 float s = focused ? FOCUS_SCALE : 1.0f;
+                FocusFx.onFocus(view, focused);
                 if (reducedMotion) {
                     view.setScaleX(s);
                     view.setScaleY(s);
@@ -1179,6 +1191,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             // Outline/clip is 5.0+. Below that the tile's own rounded background still shows; only
             // the rim drawable stops being trimmed to the corners.
             clipToCorners(card, density);
+            FocusFx.attach(card);
 
             card.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
@@ -1189,6 +1202,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
             card.setOnFocusChangeListener((view, focused) -> {
                 float s = focused ? FOCUS_SCALE : 1.0f;
+                FocusFx.onFocus(view, focused);
                 if (reducedMotion) {
                     view.setScaleX(s);
                     view.setScaleY(s);

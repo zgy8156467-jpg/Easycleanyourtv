@@ -45,7 +45,15 @@ public class HomeKeyService extends AccessibilityService {
      * to front is the one signal that survives this firmware. Needs the usage-access grant:
      *   adb shell appops set com.gathin.tvhome GET_USAGE_STATS allow
      */
-    private final android.os.Handler watchdog = new android.os.Handler();
+    /**
+     * The usage poll and the takeover retries run on their own thread. This service filters every
+     * key event on the main thread, and the system waits for that answer before delivering a key:
+     * a slow usage query on the main thread stalls the whole remote. One query per 150ms is cheap
+     * alone, but under a playing video it grew to hundreds of ms (seen as a 753ms IActivityManager
+     * call) and the remote went dead until reboot.
+     */
+    private android.os.HandlerThread pollThread;
+    private android.os.Handler watchdog;
     private long lastUsageCheck = 0;
     /** What the stock desktop of this TV looks like; see {@link DeviceProfile}. */
     private DeviceProfile device;
@@ -57,7 +65,7 @@ public class HomeKeyService extends AccessibilityService {
      * 20s). The event will not repeat once Home is pressed again, so cover the desk when the
      * suppression ends instead of dropping the event on the floor.
      */
-    private long pendingTakeoverAt = 0;
+    private volatile long pendingTakeoverAt = 0;
     private final Runnable pollUsage = new Runnable() {
         @Override
         public void run() {
@@ -92,7 +100,8 @@ public class HomeKeyService extends AccessibilityService {
         }
     };
 
-    private DeviceProfile device() {
+    /** Both the main thread (a key event) and the poll thread may ask for it. */
+    private synchronized DeviceProfile device() {
         if (device == null) device = DeviceProfile.get(this);
         return device;
     }
@@ -137,6 +146,11 @@ public class HomeKeyService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         settingsScancodes = getResources().getIntArray(R.array.settings_key_scancodes);
+        if (pollThread == null) {
+            pollThread = new android.os.HandlerThread("home-key-poll");
+            pollThread.start();
+            watchdog = new android.os.Handler(pollThread.getLooper());
+        }
         if (android.os.Build.VERSION.SDK_INT >= 21) watchdog.post(pollUsage);
         // At boot this is bound after PatchWall has already come up, so there is no window event to
         // react to; claim the screen ourselves shortly after boot instead. The first intent can be
@@ -157,8 +171,18 @@ public class HomeKeyService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
-        watchdog.removeCallbacks(pollUsage);
-        watchdog.removeCallbacks(showDeskTask);
+        if (watchdog != null) {
+            watchdog.removeCallbacks(pollUsage);
+            watchdog.removeCallbacks(showDeskTask);
+            watchdog.removeCallbacks(deskRetry);
+        }
+        if (pollThread != null) {
+            // quitSafely is API 18; the legacy build still reaches 14.
+            if (Build.VERSION.SDK_INT >= 18) pollThread.quitSafely();
+            else pollThread.quit();
+            pollThread = null;
+            watchdog = null;
+        }
         super.onDestroy();
     }
 
@@ -180,10 +204,10 @@ public class HomeKeyService extends AccessibilityService {
     }
 
     /** The package of the window that came to front last; decides whether Home is "ours" to handle. */
-    private String foreground = "";
+    private volatile String foreground = "";
 
     /** Last time PatchWall was covered up, so a burst of window events starts us only once. */
-    private long lastTakeover = 0;
+    private volatile long lastTakeover = 0;
 
     /** Until this time the desk stays out of PatchWall's way — see {@link #suppressTakeover}. */
     private static volatile long suppressUntil = 0;
@@ -211,6 +235,23 @@ public class HomeKeyService extends AccessibilityService {
         if (enabled == null || !"1".equals(on)) return false;
         ComponentName cn = new ComponentName(ctx, HomeKeyService.class);
         return enabled.contains(cn.flattenToString()) || enabled.contains(cn.flattenToShortString());
+    }
+
+    /**
+     * Whether the accessibility service is actually bound. The setting can stay on after the system
+     * killed the service (MIUI does this when memory runs short), and an enabled-but-dead service
+     * covers nothing: DeskWatch has to take over in that case.
+     */
+    static boolean running(Context ctx) {
+        android.app.ActivityManager am =
+                (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return false;
+        ComponentName self = new ComponentName(ctx, HomeKeyService.class);
+        // Deprecated, but it still reports this app's own services on every API this ships to.
+        for (android.app.ActivityManager.RunningServiceInfo info : am.getRunningServices(Integer.MAX_VALUE)) {
+            if (self.equals(info.service)) return true;
+        }
+        return false;
     }
 
     /**
@@ -268,7 +309,7 @@ public class HomeKeyService extends AccessibilityService {
         if (event.getKeyCode() == KeyEvent.KEYCODE_TV_INPUT) {
             if (!getPackageName().equals(foreground)) return false;
             if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
-                MainActivity.onInputKeyFromService();
+                return MainActivity.onInputKeyFromService();
             }
             return true;
         }

@@ -37,9 +37,16 @@ public final class QuickSettingsActivity extends Activity {
                 MainActivity.systemIntent(this, Settings.ACTION_WIFI_SETTINGS));
         Intent cast = MainActivity.castIntent(this);
         if (cast != null) addRow(rows, R.drawable.ic_cast, R.string.quick_cast, 0, null, cast);
-        // No deep link to the app list on TCL; its settings top page is the closest page.
-        addRow(rows, R.drawable.ic_apps, R.string.quick_apps, R.string.quick_apps_hint, "Main",
-                new Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS));
+        // No deep link to the app list on TCL; Xiaomi refuses the standard action outright.
+        // openAppList tries both and falls back to the vendor settings top page.
+        View appsRow = newRow(rows, R.drawable.ic_apps, R.string.quick_apps, R.string.quick_apps_hint);
+        appsRow.setOnClickListener(v -> {
+            if (!MainActivity.openAppList(this)) {
+                Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+            }
+            finish();
+        });
+        rows.addView(appsRow);
         // The two panels the desk itself owns, so the overlay is the one menu that has everything.
         // These are not settings pages, so they do not go through openPage: that path says the TV
         // cannot do it when the start fails, which for the desk's own windows is never true — the

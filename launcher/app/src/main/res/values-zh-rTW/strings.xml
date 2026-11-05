@@ -62,6 +62,11 @@
     <string name="menu_key_scope_off">只在桌面彈出</string>
     <string name="menu_key_on">選單鍵現在會在所有應用程式裡開啟快速設定</string>
     <string name="menu_key_off">選單鍵只在桌面開啟快速設定</string>
+    <string name="on">已開</string>
+    <string name="off">已關</string>
+    <string name="focus_sound">按鍵音</string>
+    <string name="focus_sound_on">按鍵音已開啟</string>
+    <string name="focus_sound_off">按鍵音已關閉</string>
     <string name="input_source_settings">輸入源設定</string>
     <string name="reduced_motion">減弱動畫</string>
     <string name="reduced_motion_off">完整動畫</string>

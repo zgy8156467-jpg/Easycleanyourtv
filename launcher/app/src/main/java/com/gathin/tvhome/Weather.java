@@ -32,7 +32,6 @@ final class Weather {
     private static final String KEY_TEMP = "temp";
     private static final String KEY_KIND = "kind";
     private static final String KEY_AT = "at";
-    private static final String KEY_VIDEO = "video";
     /** The three-day forecast as a compact JSON array [{k,x,n},…]. */
     private static final String KEY_FORECAST = "forecast";
     /** 1, 2 or 3: how many days the top bar shows. Cache always holds all three. */
@@ -241,14 +240,6 @@ final class Weather {
         prefs(ctx).edit().remove(KEY_PLACE).remove(KEY_LAT).remove(KEY_LON).apply();
     }
 
-    static boolean videoOn(Context ctx) {
-        return prefs(ctx).getBoolean(KEY_VIDEO, false);
-    }
-
-    static void setVideoOn(Context ctx, boolean on) {
-        prefs(ctx).edit().putBoolean(KEY_VIDEO, on).apply();
-    }
-
     static int kindFor(int code) {
         if (code == 0 || code == 1) return CLEAR;
         if (code == 2 || code == 3) return CLOUDY;
@@ -292,23 +283,6 @@ final class Weather {
                 return R.drawable.ic_weather_cloudy;
             default:
                 return R.drawable.ic_weather_clear;
-        }
-    }
-
-    static int video(int kind) {
-        switch (kind) {
-            case RAIN:
-                return R.raw.weather_rain;
-            case SNOW:
-                return R.raw.weather_snow;
-            case FOG:
-                return R.raw.weather_fog;
-            case THUNDER:
-                return R.raw.weather_thunder;
-            case CLOUDY:
-                return R.raw.weather_cloudy;
-            default:
-                return R.raw.weather_clear;
         }
     }
 

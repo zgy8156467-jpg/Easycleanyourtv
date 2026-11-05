@@ -22,6 +22,9 @@ public class GlassView extends View {
     private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
     private final RectF outer = new RectF();
+    private final RectF band = new RectF();
+    /** Top corners follow the slab, bottom corners are square; the gradient is done by then. */
+    private final float[] bandRadii = new float[8];
     private final Path clip = new Path();
     private final float density;
     private float radius;
@@ -64,12 +67,15 @@ public class GlassView extends View {
 
         canvas.drawRoundRect(rect, radius, radius, fill);
 
+        // No clipPath: the hardware canvas on Android 4.0 has none and throws (GLES20Canvas,
+        // seen on a Haier Amber3). A path shaped like the band draws the same pixels — and its
+        // square bottom edge is invisible because the gradient has already run out there.
+        band.set(rect.left, rect.top, rect.right, rect.top + rect.height() * 0.45f);
+        bandRadii[0] = bandRadii[1] = bandRadii[2] = bandRadii[3] = radius;
+        bandRadii[4] = bandRadii[5] = bandRadii[6] = bandRadii[7] = 0f;
         clip.reset();
-        clip.addRoundRect(rect, radius, radius, Path.Direction.CW);
-        canvas.save();
-        canvas.clipPath(clip);
-        canvas.drawRect(rect.left, rect.top, rect.right, rect.top + rect.height() * 0.45f, specular);
-        canvas.restore();
+        clip.addRoundRect(band, bandRadii, Path.Direction.CW);
+        canvas.drawPath(clip, specular);
 
         canvas.drawRoundRect(rect, radius, radius, rim);
     }

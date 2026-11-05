@@ -273,7 +273,7 @@ final class HotPosters {
     }
 
     private File dir(String source) {
-        File root = ctx.getExternalFilesDir(null);
+        File root = Config.external(ctx, null);
         return root == null ? new File(ctx.getFilesDir(), "posters/" + source)
                 : new File(root, "posters/" + source);
     }

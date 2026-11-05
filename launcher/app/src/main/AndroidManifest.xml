@@ -57,6 +57,7 @@
         android:localeConfig="@xml/locales_config"
         android:theme="@style/Theme.TvHome"
         android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         android:allowBackup="false">
 
         <activity
@@ -137,6 +138,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.ACTION_SHUTDOWN" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <!-- Revive alarm: brings DeskWatchService back after the vendor cleaner killed the
                      process. Explicit component, so no one else can send it. -->

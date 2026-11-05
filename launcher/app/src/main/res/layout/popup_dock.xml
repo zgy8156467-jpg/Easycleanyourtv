@@ -8,7 +8,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="@drawable/glass_panel"
+    android:background="@drawable/liquid_glass_panel"
     android:padding="6dp"
     android:elevation="12dp">
 

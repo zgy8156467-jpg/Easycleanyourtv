@@ -37,6 +37,19 @@
             android:fontFamily="@font/outfit"
             android:fontVariationSettings="'wght' 600" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingLeft="12dp"
+            android:paddingStart="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="2dp"
+            android:text="@string/control_section_common"
+            android:textColor="#8A111114"
+            android:textSize="12sp"
+            android:fontFamily="@font/outfit"
+            android:fontVariationSettings="'wght' 600" />
+
         <!-- Round glass tiles: the four places people actually go. The backdrop draws every
              disc and carries the ink selection, which slides between them. -->
         <FrameLayout
@@ -57,8 +70,21 @@
                 android:paddingBottom="4dp" />
         </FrameLayout>
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingLeft="12dp"
+            android:paddingStart="12dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="2dp"
+            android:text="@string/control_section_system"
+            android:textColor="#8A111114"
+            android:textSize="12sp"
+            android:fontFamily="@font/outfit"
+            android:fontVariationSettings="'wght' 600" />
+
         <LinearLayout
-            android:id="@+id/rows"
+            android:id="@+id/systemRows"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical" />
@@ -68,6 +94,52 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical" />
+
+        <!-- Tools fold away: the three rows are occasional jobs, not something to scroll past
+             every time the panel opens. The header stays one focus stop, OK unfolds the rows. -->
+        <LinearLayout
+            android:id="@+id/toolsHeader"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="2dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/control_row_bg"
+            android:paddingLeft="12dp"
+            android:paddingStart="12dp"
+            android:paddingRight="10dp"
+            android:paddingEnd="10dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/control_section_tools"
+                android:textColor="@drawable/pill_text"
+                android:textSize="12sp"
+                android:fontFamily="@font/outfit"
+                android:fontVariationSettings="'wght' 600"
+                android:duplicateParentState="true" />
+
+            <ImageView
+                android:id="@+id/toolsArrow"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:src="@drawable/ic_chevron"
+                android:tint="@drawable/pill_text"
+                android:duplicateParentState="true"
+                android:contentDescription="@null" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone" />
 
         <LinearLayout
             android:id="@+id/shortcuts"

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The light row inside the control centre. The Wi-Fi sheet is an opaque pane, so its rows are
+     transparent; this sheet is 45% white glass over the live wallpaper, and a transparent row put
+     dark text straight on the picture. A light capsule of its own keeps the ink readable. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#F2FFFFFF" />
+            <corners android:radius="26dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#E0FFFFFF" />
+            <corners android:radius="26dp" />
+        </shape>
+    </item>
+</selector>

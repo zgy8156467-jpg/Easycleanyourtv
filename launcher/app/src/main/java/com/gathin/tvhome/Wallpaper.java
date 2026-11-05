@@ -32,6 +32,8 @@ final class Wallpaper {
     private static final String PREFS = "wallpaper";
     private static final String KEY_AUTO = "bing_daily";
     private static final String KEY_LAST_DAY = "bing_last_day";
+    /** The picture on disk came from the user, not from Bing; 删除本地壁纸 acts on this one only. */
+    private static final String KEY_IMPORTED = "imported";
 
     private static final String FILE_NAME = "wallpaper.jpg";
     /**
@@ -98,15 +100,21 @@ void setAutoDaily(boolean on) {
      * though AOSP allows it — so internal storage is the fallback that always works.
      */
     private File[] targets() {
-        File dir = ctx.getExternalFilesDir(null);
+        File dir = Config.external(ctx, null);
         File internal = new File(ctx.getFilesDir(), FILE_NAME);
         return dir == null ? new File[]{internal} : new File[]{new File(dir, FILE_NAME), internal};
+    }
+
+    /** True when the picture on disk is one the user imported. */
+    boolean isImported() {
+        return hasWallpaper() && prefs.getBoolean(KEY_IMPORTED, false);
     }
 
     /** Delete the current wallpaper; the desktop falls back to its plain background. */
     boolean clear() {
         boolean ok = true;
         for (File f : targets()) ok &= !f.exists() || f.delete();
+        prefs.edit().remove(KEY_IMPORTED).apply();
         return ok;
     }
 
@@ -129,7 +137,9 @@ void setAutoDaily(boolean on) {
         if (bytes == null) return false;
         // Only remember the day once the picture is on disk, or a failed download would block
         // today's retry until tomorrow.
-        if (write(bytes)) prefs.edit().putString(KEY_LAST_DAY, today).apply();
+        if (write(bytes)) {
+            prefs.edit().putString(KEY_LAST_DAY, today).remove(KEY_IMPORTED).apply();
+        }
         return hasWallpaper();
     }
 
@@ -239,7 +249,10 @@ void setAutoDaily(boolean on) {
                 if (out.size() + n > MAX_BYTES) return false;
                 out.write(buf, 0, n);
             }
-            return write(out.toByteArray());
+            if (!write(out.toByteArray())) return false;
+            // User pictures are not the daily Bing one: mark the disk file so delete can tell them apart.
+            prefs.edit().putBoolean(KEY_IMPORTED, true).remove(KEY_LAST_DAY).apply();
+            return true;
         } catch (Exception e) {
             Log.w(TAG, "import failed: " + e.getMessage());
             return false;

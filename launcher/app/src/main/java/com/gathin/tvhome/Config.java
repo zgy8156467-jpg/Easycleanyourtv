@@ -74,9 +74,22 @@ final class Config {
         this.overlayApplied = overlayApplied;
     }
 
+    /**
+     * {@link Context#getExternalFilesDir}, but never fatal. Some TV firmwares (a Hisense VIDAA_TV on
+     * Android 7.0) answer with an ArrayIndexOutOfBoundsException from inside the framework when no
+     * external volume is mounted yet, which took the whole launcher down at start-up.
+     */
+    static File external(Context ctx, String type) {
+        try {
+            return ctx.getExternalFilesDir(type);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
     /** The folder the theme tools push into; null when external storage is unavailable. */
     static File dir(Context ctx) {
-        return ctx.getExternalFilesDir(null);
+        return external(ctx, null);
     }
 
     static Config load(Context ctx) {

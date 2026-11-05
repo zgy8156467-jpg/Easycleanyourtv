@@ -14,13 +14,26 @@ import android.os.Handler;
  * first one; the service does the same from its side, so whichever starts first wins.
  */
 public class BootReceiver extends BroadcastReceiver {
+    private static final String SHUTDOWN = "android.intent.action.ACTION_SHUTDOWN";
+
     @Override
     public void onReceive(Context context, Intent intent) {
         final Context app = context.getApplicationContext();
+        final String action = intent.getAction();
+        // The dynamic wallpaper is a download cache, not storage: every clip goes when the TV goes
+        // off. Boot clears anything a power cut left behind.
+        if (SHUTDOWN.equals(action)) {
+            LoopWallpaper.clearCache(app);
+            return;
+        }
+        if (Intent.ACTION_BOOT_COMPLETED.equals(action)) LoopWallpaper.clearCache(app);
         DeskWatchService.start(app);
         // The revive alarm only needs the service back; it must not reopen the desk on top of
         // whatever the member is watching.
-        if (DeskWatchService.TICK.equals(intent.getAction())) return;
+        if (DeskWatchService.TICK.equals(action)) return;
+        // Repeated failed starts: let the stock launcher stay up instead of forcing the desk that
+        // may be what is hanging the boot (see BootGuard).
+        if (BootGuard.safeMode(app)) return;
         final Handler handler = new Handler(app.getMainLooper());
         for (long delay : new long[]{1500, 4000}) {
             handler.postDelayed(new Runnable() {

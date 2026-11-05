@@ -465,7 +465,7 @@ final class Remote {
         // App-specific external storage first; the public Downloads folder second. MIUI TV 6
         // refuses the first with EACCES unless the app holds the storage permission, which the
         // update panel asks for before calling us. Either location is readable by the installer.
-        File dir = context.getExternalFilesDir("update");
+        File dir = Config.external(context, "update");
         if (dir != null) {
             File out = new File(dir, "tvhome.apk");
             if (copy(apk, out)) return out;

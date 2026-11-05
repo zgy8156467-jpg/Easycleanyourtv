@@ -113,10 +113,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private static final int REQ_INSTALL_STORAGE = 43;
     private static final int REQ_WIFI_SCAN = 44;
     private static final int REQ_READ_PHOTOS = 45;
+
+    /** One picture in the wallpaper chooser, from MediaStore or from a USB stick. */
+    private static final class Picked {
+        final Uri uri;
+        final long at;
+        final boolean video;
+
+        Picked(Uri uri, long at, boolean video) {
+            this.uri = uri;
+            this.at = at;
+            this.video = video;
+        }
+    }
     /** The wallpaper picker waits for the storage grant that the photo grid needs. */
     private boolean photosAfterGrant;
     /** The local picture grid, so Back can close it. */
     private PopupWindow photoPanel;
+    /** The 桌面设置 hub; each row opens a page on {@link #wallpaperPanel} or the frame-rate sheet. */
+    private PopupWindow settingsHubPanel;
+    /** The 帧率 sheet, built in code because it is three rows with live subtitles. */
+    private PopupWindow framePanel;
     /** APK waiting for the storage permission Android 6 needs before the installer can read it. */
     private java.io.File pendingInstall;
     /** The Wi-Fi sheet is waiting for the location grant scanning needs. */
@@ -128,6 +145,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private static final String PREFS_LAYOUT = "layout";
     private static final String KEY_COLUMNS = "columns";
     private static final String KEY_REDUCED_MOTION = "reduced_motion";
+    /** "system" (the TV's own setting), "24" or "12"; the desk's clock only. */
+    private static final String KEY_CLOCK_FORMAT = "clock_format";
     /** The range the panel offers, in the order the row cycles through them. */
     private static final int[] COLUMN_CHOICES = {4, 6, 8};
     /**
@@ -152,7 +171,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     /** Weather in the top bar, filled by {@link Weather} from an IP lookup or a picked city. */
     private LinearLayout weatherRow;
     private ImageView weatherIcon;
-    private TextView weatherText, weatherStatusView;
+    private TextView weatherText;
     /** The weather city picker, so Back can close it. */
     private PopupWindow cityPicker;
     /** Province/city data from assets/cities.json, parsed once per activity. */
@@ -235,6 +254,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             updateClock();
             updateGreeting();
             Weather.refreshIfDue(MainActivity.this, MainActivity.this::showWeather);
+            // Midnight: today's clip is gone, so the next one is fetched without waiting for a resume.
+            if (LoopWallpaper.on(MainActivity.this) && LoopWallpaper.file(MainActivity.this) == null) {
+                applyBackgroundVideo();
+            }
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -266,14 +289,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             finish();
             return;
         }
+        // Three quick starts with no first frame means the desk is looping on this firmware (see
+        // BootGuard). In that case the crash report is not shown — a desk that comes up plain is
+        // the way back, and the report stays on disk for a later launch.
+        final boolean safeBoot = BootGuard.safeMode(this);
         // A crash is a black window on a TV. Show the saved report before building the desk, so the
         // next launch is a picture the user can photograph instead of nothing.
-        if (CrashLog.has(this)) {
+        if (CrashLog.has(this) && !safeBoot) {
             startActivity(new Intent(this, CrashActivity.class));
             finish();
             return;
         }
         setContentView(R.layout.activity_main);
+        FocusSound.warmUp(this);
         // The desk is always on: no system display timeout. The Xiaomi gallery still gets its idle
         // broadcast, so HomeKeyService covers that separately.
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -304,6 +332,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
         root = findViewById(R.id.root);
         stage = findViewById(R.id.stage);
+        if (safeBoot) stage.setPlain(true);
         glass = findViewById(R.id.glass);
         // A theme may paint the whole background: a colour, a wallpaper, or nothing beyond both.
         root.setBackgroundColor(cfg.backgroundColor);
@@ -368,9 +397,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 });
         grid.setHasFixedSize(true);
         grid.setItemAnimator(null);
-        grid.setLayoutAnimation(new LayoutAnimationController(
-                AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
-        reducedMotion = getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
+        if (!safeBoot) {
+            grid.setLayoutAnimation(new LayoutAnimationController(
+                    AnimationUtils.loadAnimation(this, R.anim.tile_enter), 0.06f));
+        }
+        FrameRate.apply(this);
+        reducedMotion = safeBoot || FrameRate.reducedMotion(this)
+                || getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
                 .getBoolean(KEY_REDUCED_MOTION, false);
         AppAdapter.setReducedMotion(reducedMotion);
         adapter = new AppAdapter(this, this, COLUMNS, cfg.dockApps);
@@ -485,6 +518,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // The glass follows tiles; the dots are a second place focus is allowed to sit without the
         // poster disappearing. Everywhere else the poster and its title go away.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
+            if (newF != null) FocusSound.play(this);
             boolean onTile = newF != null && newF.getId() == R.id.card;
             if (newF != null && isInProgramBar(newF)) {
                 hideGlass();
@@ -497,6 +531,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             if (newF != null) {
                 stage.clearPoster();
                 hideProgram();
+                // The top bar is not an app: leaving the dock or the grid must take the app's
+                // name and its colour wash with it, or the desk stays dimmed over the wallpaper.
+                hideHero();
             } else {
                 // A transient null focus (window switch): keep the picture, just silence the clip.
                 stage.stopVideo();
@@ -508,6 +545,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // file but relaunches the desk, so "已开启 · 328 KB" was sitting over an empty background).
         wall = new Wallpaper(this);
         if (wall.hasWallpaper()) showWallpaper(wall.file());
+        applyBackgroundVideo();
         // Bing daily: refreshBingIfDue() itself skips a day that is already on disk, so this is the
         // once-a-day swap rather than a download on every start.
         if (wall.autoDaily()) {
@@ -530,11 +568,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // The update check is deliberately late: the desk should settle and take focus first, so the
         // prompt does not fight the tile animation. It fails silently when the TV has no network.
         handler.postDelayed(() -> checkUpdate(0), 5000);
+
+        if (safeBoot) {
+            toast(getString(R.string.safe_mode));
+            Errors.record("boot", "desk up in safe mode");
+        }
+        // The guard only clears once the desk has actually drawn something: six seconds covers a
+        // cold start on the slow boxes without letting a later crash masquerade as a good boot.
+        handler.postDelayed(() -> BootGuard.noteOk(this), 6000);
     }
 
     /** Opens one of the desk's own panels, whichever route asked for it (quick settings or a cold start). */
     private void openPanelFromQuickSettings(String action) {
-        if (ACTION_DESKTOP_SETTINGS.equals(action)) grid.post(this::showWallpaperPicker);
+        if (ACTION_DESKTOP_SETTINGS.equals(action)) grid.post(this::showDesktopSettings);
         else if (ACTION_DOCK_PICKER.equals(action)) grid.post(this::showDockPicker);
     }
 
@@ -546,6 +592,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             grid.post(this::scrollToTop);
         }
         stage.setPaused(false);
+        applyBackgroundVideo();
         glassShown = false;
         glass.setAlpha(0f);
         heroShown = false;
@@ -614,6 +661,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // only pauses us, so this really does mean the desk was left behind.
         awayFromDesk = true;
         started = false;
+        // Another app owns the screen: the clip and the trailer slices go now, as asked. The box has
+        // little disk, and on resume one clip is a cheap download.
+        if (stage != null) {
+            stage.clearLoop();
+            stage.clearTrailerCache();
+        }
+        LoopWallpaper.clearCache(this);
         super.onStop();
     }
 
@@ -666,14 +720,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             return;
         }
         if (dockPicker != null && dockPicker.isShowing()) {
-            dockPicker.dismiss();
+            closePage(dockPicker);
             return;
         }
         if (photoPanel != null && photoPanel.isShowing()) {
-            photoPanel.dismiss();
+            closePage(photoPanel);
         }
         if (cityPicker != null && cityPicker.isShowing()) {
-            cityPicker.dismiss();
+            closePage(cityPicker);
             return;
         }
         if (isInProgramBar(getCurrentFocus())) {
@@ -691,7 +745,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     /** Whether the tweens are turned down for a box that cannot keep up with them. */
     boolean reducedMotion() {
-        return getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
+        return FrameRate.reducedMotion(this) || getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
                 .getBoolean(KEY_REDUCED_MOTION, false);
     }
 
@@ -773,10 +827,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (activity != null) activity.runOnUiThread(activity::scrollToTop);
     }
 
-    /** Called by {@link HomeKeyService} when the remote's source key is pressed on the desk. */
-    static void onInputKeyFromService() {
+    /**
+     * Called by {@link HomeKeyService} when the remote's source key is pressed on the desk.
+     * Returns false when there is nothing to open, so the service can let the key through.
+     * Accessibility callbacks run on the main thread, which is why this does not hop threads.
+     */
+    static boolean onInputKeyFromService() {
         MainActivity activity = live == null ? null : live.get();
-        if (activity != null) activity.runOnUiThread(activity::showInputs);
+        return activity != null && activity.showInputs();
     }
 
     /** Back to the first tile, the way the Home button behaves on a phone launcher. */
@@ -933,10 +991,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             if (event.getAction() == KeyEvent.ACTION_DOWN) scrollToTop();
             return true;
         }
-        // The remote's source key. On TCL the vendor desktop used to answer it and ours does not
-        // handle it at all, so on those sets the button just did nothing once this desk was front.
+        // The remote's source key. If the set offers no way in (no tv_input service and no vendor
+        // source app), let the key through instead of swallowing it with an empty menu.
         if (code == KeyEvent.KEYCODE_TV_INPUT) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) showInputs();
+            if (event.getAction() == KeyEvent.ACTION_DOWN) return showInputs();
             return true;
         }
         if (code == KeyEvent.KEYCODE_MENU
@@ -953,7 +1011,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 && (code == KeyEvent.KEYCODE_APP_SWITCH
                 || code == KeyEvent.KEYCODE_GUIDE)) {
             if (dockPicker != null && dockPicker.isShowing()) {
-                dockPicker.dismiss();
+                closePage(dockPicker);
             } else {
                 showDockPicker();
             }
@@ -1215,6 +1273,46 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         }
     }
 
+    /**
+     * The TV's own installed-apps list. The standard action resolves but does not launch on some
+     * vendor settings packages — Xiaomi's answers 「此电视不支持」 — so every activity claiming the
+     * action is tried explicitly, vendor settings first, and the vendor settings top page is the
+     * last resort. The winning shape is recorded so the console shows it for the next firmware.
+     */
+    static boolean openAppList(android.content.Context ctx) {
+        final Intent action = new Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS);
+        List<ResolveInfo> candidates = ctx.getPackageManager().queryIntentActivities(action, 0);
+        for (int pass = 0; pass < 2; pass++) {
+            for (ResolveInfo ri : candidates) {
+                if (ri.activityInfo == null) continue;
+                String pkg = ri.activityInfo.packageName;
+                boolean stub = pkg.startsWith("com.android.tv.frameworkpackagestubs");
+                boolean vendor = !"com.android.settings".equals(pkg)
+                        && !"com.android.tv.settings".equals(pkg);
+                if (stub || (pass == 0) != vendor) continue;
+                try {
+                    ctx.startActivity(new Intent(action)
+                            .setComponent(new ComponentName(pkg, ri.activityInfo.name))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    Errors.record("apps", "opened " + pkg + "/" + ri.activityInfo.name);
+                    return true;
+                } catch (RuntimeException ignored) {
+                }
+            }
+        }
+        Intent vendor = vendorSettingsIntent(ctx);
+        if (vendor != null) {
+            vendor.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                ctx.startActivity(vendor);
+                Errors.record("apps", "opened vendor settings");
+                return true;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        return false;
+    }
+
     /** Reload the grid so the new dock order takes effect, then put focus back where the user was. */
     private void refreshDock() {
         final String key = lastFocusedKey;
@@ -1254,7 +1352,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      */
     private void showDockPicker() {
         if (dockPicker != null && dockPicker.isShowing()) {
-            dockPicker.dismiss();
+            closePage(dockPicker);
             return;
         }
         View panel = getLayoutInflater().inflate(R.layout.popup_dock, root, false);
@@ -1330,8 +1428,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         View anchor = findViewById(R.id.btnControl);
         // Sized from its content and hung under the button with the left edges aligned: the same
         // glass dropdown as the Inputs menu, not a settings sheet floating mid-screen.
-        dockPicker = glassPanel(panel, anchor, 260);
-        dropIn(dockPicker, panel, anchor, Gravity.START);
+        dockPicker = floatingOver(panel, anchor, 260, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(dockPicker, this::showControlCenter);
+        riseIn(dockPicker, panel, anchor);
         // The rows appear one layout pass after the popup does. Without putting focus on the first
         // one the remote has nothing selected and the panel looks frozen.
         list.post(() -> {
@@ -1377,9 +1476,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         });
 
         View anchor = findViewById(R.id.btnControl);
-        dockSizePicker = glassPanel(panel, anchor, 260);
-        dockSizePicker.setOnDismissListener(this::focusControlPill);
-        dropIn(dockSizePicker, panel, anchor, Gravity.START);
+        dockSizePicker = floatingOver(panel, anchor, 260, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(dockSizePicker, () -> showWallpaperPicker(PAGE_DESKTOP));
+        riseIn(dockSizePicker, panel, anchor);
         final int at = Math.max(0, adapter.dockSize() - DockStore.MIN_SIZE);
         list.post(() -> {
             View row = list.getChildAt(at);
@@ -1696,14 +1795,203 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      * drop the wallpaper entirely. The panel is a popup because it is a one-off setting, not a place
      * the user browses.
      */
+    private static final int PAGE_WALLPAPER = 0;
+    private static final int PAGE_DESKTOP = 1;
+    private static final int PAGE_TV = 2;
+    /** The rows each 桌面设置 page owns; the other pages' rows are hidden, not rebuilt. */
+    private static final int[][] PAGE_ROWS = {
+            {R.id.rowBing, R.id.rowLoop, R.id.rowLoopPick, R.id.rowPick, R.id.rowOff},
+            {R.id.rowCity, R.id.rowForecast, R.id.rowColumns, R.id.rowDockSize,
+                    R.id.rowMenuKey, R.id.rowClock, R.id.rowFocusSound},
+            {R.id.rowTvNetwork, R.id.rowTvPicture, R.id.rowTvApps, R.id.rowTvSystem,
+                    R.id.rowRestore},
+    };
+    private static final int[] PAGE_TITLES = {
+            R.string.wp_group_wallpaper, R.string.wp_group_desktop, R.string.wp_group_tv,
+    };
+
+    /** 桌面设置: three entries, one page each. The desk's own menu entry still goes straight to 壁纸. */
+    private void showDesktopSettings() {
+        if (settingsHubPanel != null && settingsHubPanel.isShowing()) {
+            closePage(settingsHubPanel);
+            return;
+        }
+        View panel = getLayoutInflater().inflate(R.layout.popup_settings, root, false);
+        panel.findViewById(R.id.hubWallpaper).setOnClickListener(v -> {
+            closePage(settingsHubPanel);
+            root.post(() -> showWallpaperPicker(PAGE_WALLPAPER));
+        });
+        panel.findViewById(R.id.hubDesktop).setOnClickListener(v -> {
+            closePage(settingsHubPanel);
+            root.post(() -> showWallpaperPicker(PAGE_DESKTOP));
+        });
+        panel.findViewById(R.id.hubTv).setOnClickListener(v -> {
+            closePage(settingsHubPanel);
+            root.post(() -> showWallpaperPicker(PAGE_TV));
+        });
+        panel.findViewById(R.id.hubFrame).setOnClickListener(v -> {
+            closePage(settingsHubPanel);
+            root.post(this::showFrameRatePage);
+        });
+        View anchor = findViewById(R.id.btnControl);
+        settingsHubPanel = floatingOver(panel, anchor, 300, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(settingsHubPanel, this::showControlCenter);
+        riseIn(settingsHubPanel, panel, anchor);
+    }
+
+    /**
+     * 帧率: the panel's refresh rate, the desk's animation rate and the wallpaper's playback rate.
+     * "Auto" resolves against this box's RAM and SDK (see {@link FrameRate}) — a 900 MB MiTV gets
+     * the 30 fps profile, a modern set the full one.
+     */
+    private void showFrameRatePage() {
+        if (framePanel != null && framePanel.isShowing()) {
+            closePage(framePanel);
+            return;
+        }
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(6), dp(6), dp(6), dp(6));
+
+        TextView title = new TextView(this);
+        title.setText(R.string.frame_rate_title);
+        title.setTextSize(13);
+        title.setTextColor(0xE6111114);
+        try {
+            title.setTypeface(androidx.core.content.res.ResourcesCompat.getFont(this, R.font.outfit));
+            if (Build.VERSION.SDK_INT >= 26) title.setFontVariationSettings("'wght' 600");
+        } catch (RuntimeException ignored) {
+        }
+        title.setPadding(dp(12), dp(6), dp(12), dp(4));
+        panel.addView(title);
+
+        final int[] rates = FrameRate.rates(this);
+        final View refresh = actionRow(R.string.frame_refresh);
+        final TextView refreshSub = refresh.findViewById(R.id.rowSettingSubtitle);
+        refreshSub.setVisibility(View.VISIBLE);
+        refresh.setOnClickListener(v -> {
+            if (rates.length < 2) {
+                toast(getString(R.string.frame_only_one, FrameRate.currentHz(this)));
+                return;
+            }
+            int mode = FrameRate.refreshMode(this);
+            int at = 0;
+            for (int i = 0; i < rates.length; i++) {
+                if (mode != 0 && FrameRate.modeFor(this, rates[i]) == mode) at = i + 1;
+            }
+            int next = (at + 1) % (rates.length + 1);
+            FrameRate.setRefreshMode(this, next == 0 ? 0 : FrameRate.modeFor(this, rates[next - 1]));
+            FrameRate.apply(this);
+            refreshSub.setText(refreshStatus(rates));
+        });
+        panel.addView(refresh);
+
+        final View ui = actionRow(R.string.frame_ui);
+        final TextView uiSub = ui.findViewById(R.id.rowSettingSubtitle);
+        uiSub.setVisibility(View.VISIBLE);
+        ui.setOnClickListener(v -> {
+            String[] order = {"auto", "60", "30", "off"};
+            String now = FrameRate.uiChoice(this);
+            int at = 0;
+            for (int i = 0; i < order.length; i++) if (order[i].equals(now)) at = i;
+            FrameRate.setUiChoice(this, order[(at + 1) % order.length]);
+            FrameRate.apply(this);
+            // The desk reads the rate once, at build time: rebuild so it shows the new one now.
+            toast(getString(R.string.frame_changed));
+            closePage(framePanel);
+            recreate();
+        });
+        panel.addView(ui);
+
+        final View video = actionRow(R.string.frame_video);
+        final TextView videoSub = video.findViewById(R.id.rowSettingSubtitle);
+        videoSub.setVisibility(View.VISIBLE);
+        video.setOnClickListener(v -> {
+            if (!FrameRate.videoRateSupported()) {
+                toast(getString(R.string.frame_video_unsupported));
+                return;
+            }
+            String[] order = {"auto", "source", "24", "30"};
+            String now = FrameRate.videoChoice(this);
+            int at = 0;
+            for (int i = 0; i < order.length; i++) if (order[i].equals(now)) at = i;
+            FrameRate.setVideoChoice(this, order[(at + 1) % order.length]);
+            videoSub.setText(videoStatus());
+            toast(getString(R.string.frame_changed));
+        });
+        panel.addView(video);
+
+        refreshSub.setText(refreshStatus(rates));
+        uiSub.setText(uiStatus());
+        videoSub.setText(videoStatus());
+
+        View anchor = findViewById(R.id.btnControl);
+        framePanel = floatingOver(panel, anchor, 320, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(framePanel, this::showDesktopSettings);
+        riseIn(framePanel, panel, anchor);
+        panel.post(refresh::requestFocus);
+    }
+
+    private String refreshStatus(int[] rates) {
+        if (rates.length < 2) return getString(R.string.frame_only_one, FrameRate.currentHz(this));
+        int mode = FrameRate.refreshMode(this);
+        if (mode == 0) return getString(R.string.frame_auto_hz, FrameRate.currentHz(this));
+        int rate = rateOfMode(mode);
+        return rate > 0
+                ? getString(R.string.frame_hz_value, rate)
+                : getString(R.string.frame_auto_hz, FrameRate.currentHz(this));
+    }
+
+    /** The refresh rate behind a display mode id; 0 when the mode vanished. */
+    private int rateOfMode(int modeId) {
+        if (Build.VERSION.SDK_INT < 23) return 0;
+        android.view.Display d = getWindowManager().getDefaultDisplay();
+        for (android.view.Display.Mode m : d.getSupportedModes()) {
+            if (m.getModeId() == modeId) return Math.round(m.getRefreshRate());
+        }
+        return 0;
+    }
+
+    private String uiStatus() {
+        String v = FrameRate.uiChoice(this);
+        if (!"auto".equals(v)) {
+            if ("off".equals(v)) return getString(R.string.fps_off);
+            return getString(R.string.frame_fps_value, Integer.parseInt(v));
+        }
+        String effective = FrameRate.effectiveUi(this);
+        if ("off".equals(effective)) return getString(R.string.fps_off);
+        return getString(R.string.frame_auto_model, Integer.parseInt(effective), Build.MODEL);
+    }
+
+    private String videoStatus() {
+        if (!FrameRate.videoRateSupported()) return getString(R.string.frame_video_unsupported);
+        String v = FrameRate.videoChoice(this);
+        if ("auto".equals(v)) return getString(R.string.fps_auto);
+        if ("source".equals(v)) return getString(R.string.fps_follow);
+        return getString(R.string.frame_fps_value, Integer.parseInt(v));
+    }
+
     private void showWallpaperPicker() {
+        showWallpaperPicker(PAGE_WALLPAPER, this::showDesktopSettings);
+    }
+
+    private void showWallpaperPicker(int page) {
+        showWallpaperPicker(page, this::showDesktopSettings);
+    }
+
+    private void showWallpaperPicker(int page, Runnable up) {
         if (wallpaperPanel != null && wallpaperPanel.isShowing()) {
-            wallpaperPanel.dismiss();
+            closePage(wallpaperPanel);
             return;
         }
         wall = new Wallpaper(this);
 
         View panel = getLayoutInflater().inflate(R.layout.popup_wallpaper, root, false);
+        ((TextView) panel.findViewById(R.id.pageTitle)).setText(PAGE_TITLES[page]);
+        for (int p = 0; p < PAGE_ROWS.length; p++) {
+            int vis = p == page ? View.VISIBLE : View.GONE;
+            for (int id : PAGE_ROWS[p]) panel.findViewById(id).setVisibility(vis);
+        }
         ImageView bingTick = panel.findViewById(R.id.bingTick);
         TextView status = panel.findViewById(R.id.bingStatus);
         TextView columnsStatus = panel.findViewById(R.id.columnsStatus);
@@ -1744,21 +2032,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             }
         });
 
-        weatherStatusView = panel.findViewById(R.id.weatherStatus);
-        final View rowWeather = panel.findViewById(R.id.rowWeather);
-        weatherStatusView.setText(weatherStatus());
-        rowWeather.setOnClickListener(v -> {
-            boolean on = !Weather.videoOn(this);
-            Weather.setVideoOn(this, on);
-            weatherStatusView.setText(weatherStatus());
-            applyWeatherVideo();
-            if (on) refreshWeather(true);
-        });
-
         final TextView cityStatusView = panel.findViewById(R.id.cityStatus);
         cityStatusView.setText(cityStatus());
         panel.findViewById(R.id.rowCity).setOnClickListener(v -> {
-            if (wallpaperPanel != null) wallpaperPanel.dismiss();
+            if (wallpaperPanel != null) closePage(wallpaperPanel);
             showCityPicker();
         });
 
@@ -1775,22 +2052,55 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
         rowColumns.setOnClickListener(v -> cycleColumns(columnsStatus));
 
+        final TextView dockSizeStatus = panel.findViewById(R.id.dockSizeStatus);
+        dockSizeStatus.setText(getResources().getQuantityString(R.plurals.dock_size_value,
+                adapter.dockSize(), adapter.dockSize()));
+        panel.findViewById(R.id.rowDockSize).setOnClickListener(v -> {
+            if (wallpaperPanel != null) closePage(wallpaperPanel);
+            root.post(this::showDockSizePicker);
+        });
+
+        final TextView loopStatus = panel.findViewById(R.id.loopStatus);
+        final ImageView loopTick = panel.findViewById(R.id.loopTick);
+        final View rowLoopPick = panel.findViewById(R.id.rowLoopPick);
+        final TextView loopPickStatus = panel.findViewById(R.id.loopPickStatus);
+        final Runnable refreshLoop = () -> {
+            boolean on = LoopWallpaper.on(this);
+            loopTick.setVisibility(on ? View.VISIBLE : View.INVISIBLE);
+            loopStatus.setText(loopWallpaperStatus());
+            loopPickStatus.setText(loopPickStatus());
+        };
+        refreshLoop.run();
+        panel.findViewById(R.id.rowLoop).setOnClickListener(v -> {
+            boolean on = !LoopWallpaper.on(this);
+            LoopWallpaper.setOn(this, on);
+            refreshLoop.run();
+            applyBackgroundVideo();
+            if (on) toast(getString(R.string.loop_downloading));
+            else toast(getString(R.string.loop_off_done));
+        });
+        rowLoopPick.setOnClickListener(v -> {
+            if (wallpaperPanel != null) closePage(wallpaperPanel);
+            root.post(this::showLoopPicker);
+        });
+
         // The TV's own settings live here too, so the one settings entry people look for is complete.
         panel.findViewById(R.id.rowTvNetwork).setOnClickListener(v -> {
-            if (wallpaperPanel != null) wallpaperPanel.dismiss();
+            if (wallpaperPanel != null) closePage(wallpaperPanel);
             openPage("network", systemIntent(Settings.ACTION_WIFI_SETTINGS));
         });
         panel.findViewById(R.id.rowTvPicture).setOnClickListener(v -> {
-            if (wallpaperPanel != null) wallpaperPanel.dismiss();
+            if (wallpaperPanel != null) closePage(wallpaperPanel);
             openPage("picture", pictureIntent(this));
         });
         panel.findViewById(R.id.rowTvApps).setOnClickListener(v -> {
-            if (wallpaperPanel != null) wallpaperPanel.dismiss();
-            // No deep link to the app list on TCL; its settings top page is the closest page.
-            openPage("Main", systemIntent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS));
+            if (wallpaperPanel != null) closePage(wallpaperPanel);
+            // Vendor settings first: TCL has no deep link, and Xiaomi's package refuses the
+            // standard action outright. openAppList walks both and falls back to the top page.
+            if (!openAppList(this)) toast(getString(R.string.not_available));
         });
         panel.findViewById(R.id.rowTvSystem).setOnClickListener(v -> {
-            if (wallpaperPanel != null) wallpaperPanel.dismiss();
+            if (wallpaperPanel != null) closePage(wallpaperPanel);
             openPage("Main", tvSettingsIntent(this));
         });
 
@@ -1807,35 +2117,46 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             toast(getString(on ? R.string.menu_key_on : R.string.menu_key_off));
         });
 
-        final TextView motionStatus = panel.findViewById(R.id.motionStatus);
-        final View rowMotion = panel.findViewById(R.id.rowMotion);
-        motionStatus.setText(reducedMotion()
-                ? getString(R.string.reduced_motion_on) : getString(R.string.reduced_motion_off));
-        rowMotion.setOnClickListener(v -> {
-            boolean on = !reducedMotion();
-            getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE).edit().putBoolean(KEY_REDUCED_MOTION, on).apply();
-            motionStatus.setText(on ? getString(R.string.reduced_motion_on) : getString(R.string.reduced_motion_off));
-            toast(getString(on ? R.string.reduced_motion_turned_on : R.string.reduced_motion_turned_off));
-            // The tile size maths reads the zoom factor, so the desk has to be rebuilt for it to apply.
-            recreate();
+        final TextView focusSoundStatus = panel.findViewById(R.id.focusSoundStatus);
+        final View rowFocusSound = panel.findViewById(R.id.rowFocusSound);
+        focusSoundStatus.setText(getString(FocusSound.on(this) ? R.string.on : R.string.off));
+        rowFocusSound.setOnClickListener(v -> {
+            boolean on = !FocusSound.on(this);
+            FocusSound.setOn(this, on);
+            // Warm the sample now so the first press after turning it on is not silent.
+            if (on) FocusSound.warmUp(this);
+            focusSoundStatus.setText(getString(on ? R.string.on : R.string.off));
+            toast(getString(on ? R.string.focus_sound_on : R.string.focus_sound_off));
+        });
+
+        final TextView clockStatus = panel.findViewById(R.id.clockStatus);
+        final View rowClock = panel.findViewById(R.id.rowClock);
+        clockStatus.setText(clockFormatLabel(getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
+                .getString(KEY_CLOCK_FORMAT, "system")));
+        rowClock.setOnClickListener(v -> {
+            String now = getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
+                    .getString(KEY_CLOCK_FORMAT, "system");
+            // One press cycles: follow the TV, 24-hour, 12-hour.
+            String next = "system".equals(now) ? "24" : "24".equals(now) ? "12" : "system";
+            getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE).edit()
+                    .putString(KEY_CLOCK_FORMAT, next).apply();
+            clockStatus.setText(clockFormatLabel(next));
+            updateClock();
         });
 
         View rowRestore = panel.findViewById(R.id.rowRestore);
         rowRestore.setOnClickListener(v -> uninstallSelf());
 
         rowPick.setOnClickListener(v -> {
-            wallpaperPanel.dismiss();
+            closePage(wallpaperPanel);
             openPhotoPicker();
         });
 
         rowOff.setOnClickListener(v -> {
+            stopLoopWallpaper();
             boolean removed = wall.clear();
             bingTick.setVisibility(View.INVISIBLE);
             wall.setAutoDaily(false);
-            // The weather loop is a wallpaper too: removing the wallpaper removes it as well.
-            Weather.setVideoOn(this, false);
-            stage.clearWeatherVideo();
-            if (weatherStatusView != null) weatherStatusView.setText(weatherStatus());
             status.setText(wallpaperStatus());
             // Drop the picture from the desk straight away; a wallpaper that stays on screen after
             // the user asked to remove it looks like the button did nothing.
@@ -1847,8 +2168,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // Sized from its content and hung under the button with the left edges aligned, exactly like
         // the Inputs menu. No row scaling: a scaled row is what used to need clipping turned off, and
         // the focus pill alone is enough to see where you are.
-        wallpaperPanel = glassPanel(panel, anchor, 300);
-        dropIn(wallpaperPanel, panel, anchor, Gravity.START);
+        wallpaperPanel = floatingOver(panel, anchor, 300, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(wallpaperPanel, up);
+        riseIn(wallpaperPanel, panel, anchor);
     }
 
     /**
@@ -1858,7 +2180,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      */
     private void uninstallSelf() {
         HomeKeyService.suppressTakeover(60_000);
-        if (wallpaperPanel != null) wallpaperPanel.dismiss();
+        if (wallpaperPanel != null) closePage(wallpaperPanel);
         if (controlPanel != null) controlPanel.dismiss();
         try {
             startActivity(new Intent(Intent.ACTION_DELETE,
@@ -1866,6 +2188,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         } catch (RuntimeException e) {
             toast(getString(R.string.not_available));
         }
+    }
+
+    /** The picker row's second line: which clip is pinned, or that it rotates daily. */
+    private String loopPickStatus() {
+        String pick = LoopWallpaper.pick(this);
+        if (pick.isEmpty()) return getString(R.string.loop_daily);
+        if (pick.equals("local")) return getString(R.string.loop_local_name);
+        String name = LoopWallpaper.name(this);
+        return name.isEmpty() ? pick : name;
     }
 
     /** One line telling the user what the wallpaper is right now. */
@@ -1911,13 +2242,43 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (requestCode != REQ_PICK_WALLPAPER || resultCode != RESULT_OK || data == null) return;
         Uri uri = data.getData();
         if (uri == null) return;
+        String type = null;
+        try {
+            type = getContentResolver().getType(uri);
+        } catch (RuntimeException ignored) {
+        }
+        boolean video = (type != null && type.startsWith("video/"))
+                || (type == null && uri.getPath() != null && LocalImages.isVideo(uri.getPath()));
+        if (video) {
+            importLocalVideo(uri);
+            return;
+        }
         if (wall == null) wall = new Wallpaper(this);
+        stopLoopWallpaper();
         if (wall.importFrom(uri)) {
             toast(getString(R.string.wallpaper_set));
             applyWallpaper();
         } else {
             toast(getString(R.string.wallpaper_bad));
         }
+    }
+
+    /** Copy the picked video in and put it on the desk; runs off the UI thread, it can be large. */
+    private void importLocalVideo(final Uri uri) {
+        toast(getString(R.string.loop_downloading));
+        new Thread(() -> {
+            final java.io.File got = LoopWallpaper.importLocal(this, uri);
+            handler.post(() -> {
+                if (isFinishing()) return;
+                if (got == null) {
+                    toast(getString(R.string.wallpaper_bad));
+                    return;
+                }
+                stage.clearLoop();
+                stage.setLoop(got);
+                toast(getString(R.string.wallpaper_set));
+            });
+        }, "local-video").start();
     }
 
     /**
@@ -1937,28 +2298,114 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     }
 
     private void showPhotoChooser() {
-        final List<Uri> photos = new ArrayList<>();
+        // The scan touches a USB stick that may be slow, and MediaStore may be empty on a box that
+        // has never indexed the stick. Both run off the UI thread; the grid appears when they are done.
+        new Thread(() -> {
+            final List<Picked> photos = collectPhotos(9);
+            handler.post(() -> {
+                if (isFinishing()) return;
+                if (photos.isEmpty()) {
+                    toast(getString(R.string.no_photos));
+                    return;
+                }
+                showPhotoChooser(photos);
+            });
+        }, "photo-scan").start();
+    }
+
+    /**
+     * The USB stick, on its own. The scan is the same bounded one the grid uses; the system picker
+     * is only a fallback, because several of these TVs ship it as a touch screen a remote cannot use.
+     */
+    private void importFromUsb() {
+        new Thread(() -> {
+            final List<Picked> found = new ArrayList<>();
+            for (java.io.File f : LocalImages.recent(9)) {
+                found.add(new Picked(Uri.fromFile(f), f.lastModified(),
+                        LocalImages.isVideo(f.getName())));
+            }
+            handler.post(() -> {
+                if (isFinishing()) return;
+                if (found.isEmpty()) {
+                    toast(getString(R.string.no_photos));
+                    startSystemPicker();
+                    return;
+                }
+                showPhotoChooser(found, R.string.usb_import);
+            });
+        }, "usb-scan").start();
+    }
+
+    /**
+     * The newest pictures from the TV plus anything readable on a USB stick, merged by date. A stick
+     * pushed in after boot is missing from MediaStore on most of these sets, which is why the list
+     * alone used to say "no pictures" over a drive full of them.
+     */
+    private List<Picked> collectPhotos(int max) {
+        List<Picked> found = new ArrayList<>();
         Cursor c = null;
         try {
             c = getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    new String[]{MediaStore.Images.Media._ID},
+                    new String[]{MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_ADDED},
                     null, null, MediaStore.Images.Media.DATE_ADDED + " DESC");
-            while (c != null && c.moveToNext() && photos.size() < 9) {
-                photos.add(ContentUris.withAppendedId(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0)));
+            while (c != null && c.moveToNext() && found.size() < max) {
+                found.add(new Picked(ContentUris.withAppendedId(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0)),
+                        c.getLong(1) * 1000L, false));
             }
         } catch (RuntimeException ignored) {
         } finally {
             if (c != null) c.close();
         }
-        if (photos.isEmpty()) {
-            toast(getString(R.string.no_photos));
-            return;
+        // Videos are wallpapers too: the picker takes a clip as readily as a picture.
+        c = null;
+        try {
+            c = getContentResolver().query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    new String[]{MediaStore.Video.Media._ID, MediaStore.Video.Media.DATE_ADDED},
+                    null, null, MediaStore.Video.Media.DATE_ADDED + " DESC");
+            while (c != null && c.moveToNext() && found.size() < max) {
+                found.add(new Picked(ContentUris.withAppendedId(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI, c.getLong(0)),
+                        c.getLong(1) * 1000L, true));
+            }
+        } catch (RuntimeException ignored) {
+        } finally {
+            if (c != null) c.close();
         }
+        for (java.io.File f : LocalImages.recent(max)) {
+            found.add(new Picked(Uri.fromFile(f), f.lastModified(), LocalImages.isVideo(f.getName())));
+        }
+        Collections.sort(found, (a, b) -> Long.compare(b.at, a.at));
+        List<Picked> photos = new ArrayList<>(Math.min(max, found.size()));
+        for (Picked p : found) {
+            if (photos.size() >= max) break;
+            photos.add(p);
+        }
+        return photos;
+    }
+
+    private void showPhotoChooser(final List<Picked> photos) {
+        showPhotoChooser(photos, R.string.pick_wallpaper);
+    }
+
+    private void showPhotoChooser(final List<Picked> photos, int titleRes) {
         if (photoPanel != null && photoPanel.isShowing()) return;
 
         View panel = getLayoutInflater().inflate(R.layout.popup_photos, root, false);
-        ((TextView) panel.findViewById(R.id.photosTitle)).setText(R.string.choose_photo);
+        ((TextView) panel.findViewById(R.id.photosTitle)).setText(titleRes);
+        LinearLayout actions = panel.findViewById(R.id.photoActions);
+        View usb = actionRow(R.string.usb_import);
+        usb.setOnClickListener(v -> {
+            closePage(photoPanel);
+            importFromUsb();
+        });
+        actions.addView(usb);
+        View delete = actionRow(R.string.local_delete);
+        delete.setOnClickListener(v -> {
+            closePage(photoPanel);
+            deleteLocalWallpaper();
+        });
+        actions.addView(delete);
         LinearLayout rows = panel.findViewById(R.id.photoRows);
         LinearLayout line = null;
         final List<ImageView> thumbs = new ArrayList<>();
@@ -1970,7 +2417,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 rows.addView(line, new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             }
-            final Uri uri = photos.get(i);
+            final Picked picked = photos.get(i);
+            final Uri uri = picked.uri;
             FrameLayout cell = new FrameLayout(this);
             cell.setFocusable(true);
             cell.setClickable(true);
@@ -1987,27 +2435,167 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                     (int) (3 * density), (int) (3 * density));
             line.addView(cell, lp);
             cell.setOnClickListener(v -> {
-                photoPanel.dismiss();
-                if (wall == null) wall = new Wallpaper(this);
-                if (wall.importFrom(uri)) {
-                    toast(getString(R.string.wallpaper_set));
-                    applyWallpaper();
+                closePage(photoPanel);
+                if (picked.video) {
+                    importLocalVideo(uri);
                 } else {
-                    toast(getString(R.string.wallpaper_bad));
+                    stopLoopWallpaper();
+                    if (wall == null) wall = new Wallpaper(this);
+                    if (wall.importFrom(uri)) {
+                        toast(getString(R.string.wallpaper_set));
+                        applyWallpaper();
+                    } else {
+                        toast(getString(R.string.wallpaper_bad));
+                    }
                 }
             });
             thumbs.add(thumb);
         }
         View anchor = findViewById(R.id.btnControl);
-        photoPanel = glassPanel(panel, anchor, 340);
-        dropIn(photoPanel, panel, anchor, Gravity.END);
-        final LinearLayout firstLine = line;
-        panel.post(() -> firstLine.getChildAt(0).requestFocus());
+        // 490dp, not 340: the grid below is three 150dp cells wide, and a 340dp panel clipped the
+        // third column of every row (the 24-clip library looked like it stopped at the landscapes).
+        photoPanel = floatingOver(panel, anchor, 490, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(photoPanel, () -> showWallpaperPicker(PAGE_WALLPAPER));
+        riseIn(photoPanel, panel, anchor);
+        panel.post(usb::requestFocus);
         loadPhotoThumbs(photos, thumbs);
     }
 
+    private View actionRow(int titleRes) {
+        View row = getLayoutInflater().inflate(R.layout.row_setting, null, false);
+        ((TextView) row.findViewById(R.id.rowSettingTitle)).setText(titleRes);
+        return row;
+    }
+
+    /** Removes what the user imported: the local clip, and any picture copied onto the box. */
+    private void deleteLocalWallpaper() {
+        boolean hadVideo = LoopWallpaper.hasLocal(this);
+        LoopWallpaper.removeLocal(this);
+        if (wall == null) wall = new Wallpaper(this);
+        boolean hadPicture = wall.isImported();
+        if (hadPicture) {
+            wall.clear();
+            removeWallpaper();
+        }
+        if (hadVideo) applyBackgroundVideo();
+        toast(getString(hadVideo || hadPicture ? R.string.local_deleted : R.string.nothing_local));
+    }
+
+    /**
+     * The library chooser. One cell sends it back to the daily rotation; the rest pin one clip.
+     * Choosing anything drops the previously downloaded clip before the new one is fetched.
+     */
+    private void showLoopPicker() {
+        toast(getString(R.string.loop_loading));
+        new Thread(() -> {
+            final List<LoopWallpaper.Clip> clips = LoopWallpaper.list(this);
+            handler.post(() -> {
+                if (isFinishing()) return;
+                if (clips.isEmpty()) {
+                    toast(getString(R.string.loop_library_failed));
+                    return;
+                }
+                showLoopChooser(clips);
+            });
+        }, "loop-list").start();
+    }
+
+    private void showLoopChooser(final List<LoopWallpaper.Clip> clips) {
+        if (photoPanel != null && photoPanel.isShowing()) return;
+        View panel = getLayoutInflater().inflate(R.layout.popup_photos, root, false);
+        ((TextView) panel.findViewById(R.id.photosTitle)).setText(R.string.loop_choose);
+        LinearLayout rows = panel.findViewById(R.id.photoRows);
+        LinearLayout line = null;
+        final List<ImageView> thumbs = new ArrayList<>();
+        final List<LoopWallpaper.Clip> thumbClips = new ArrayList<>();
+
+        for (int i = -1; i < clips.size(); i++) {
+            if ((i + 1) % 3 == 0) {
+                line = new LinearLayout(this);
+                line.setOrientation(LinearLayout.HORIZONTAL);
+                line.setGravity(Gravity.CENTER);
+                rows.addView(line, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            final LinearLayout row = line;
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL);
+            cell.setGravity(Gravity.CENTER_HORIZONTAL);
+            cell.setFocusable(true);
+            cell.setClickable(true);
+            cell.setPadding((int) (3 * density), (int) (3 * density),
+                    (int) (3 * density), (int) (3 * density));
+            cell.setBackgroundResource(R.drawable.photo_cell_bg);
+
+            ImageView thumb = new ImageView(this);
+            thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            cell.addView(thumb, new LinearLayout.LayoutParams(
+                    (int) (150 * density), (int) (84 * density)));
+            TextView name = new TextView(this);
+            name.setTextSize(11);
+            name.setSingleLine(true);
+            name.setGravity(Gravity.CENTER);
+            name.setTextColor(0xFFFFFFFF);
+            name.setPadding(0, (int) (1 * density), 0, 0);
+            cell.addView(name, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins((int) (3 * density), (int) (3 * density),
+                    (int) (3 * density), (int) (3 * density));
+            row.addView(cell, lp);
+
+            if (i < 0) {
+                name.setText(R.string.loop_daily);
+                cell.setOnClickListener(v -> {
+                    closePage(photoPanel);
+                    LoopWallpaper.chooseDaily(this);
+                    applyBackgroundVideo();
+                    toast(getString(R.string.loop_daily_done));
+                });
+            } else {
+                final LoopWallpaper.Clip clip = clips.get(i);
+                name.setText(clip.name);
+                thumbs.add(thumb);
+                thumbClips.add(clip);
+                cell.setOnClickListener(v -> {
+                    closePage(photoPanel);
+                    LoopWallpaper.choose(this, clip);
+                    applyBackgroundVideo();
+                    toast(getString(R.string.loop_set, clip.name));
+                });
+            }
+        }
+
+        View anchor = findViewById(R.id.btnControl);
+        // 490dp, not 340: the grid below is three 150dp cells wide, and a 340dp panel clipped the
+        // third column of every row (the 24-clip library looked like it stopped at the landscapes).
+        photoPanel = floatingOver(panel, anchor, 490, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(photoPanel, () -> showWallpaperPicker(PAGE_WALLPAPER));
+        riseIn(photoPanel, panel, anchor);
+        panel.post(() -> {
+            LinearLayout first = (LinearLayout) rows.getChildAt(0);
+            first.getChildAt(0).requestFocus();
+        });
+        if (!thumbs.isEmpty()) {
+            final List<ImageView> views = new ArrayList<>(thumbs);
+            final List<LoopWallpaper.Clip> list = new ArrayList<>(thumbClips);
+            new Thread(() -> {
+                for (int i = 0; i < list.size(); i++) {
+                    final Bitmap bmp = LoopWallpaper.thumb(list.get(i));
+                    if (bmp == null) continue;
+                    final ImageView view = views.get(i);
+                    handler.post(() -> {
+                        if (!isFinishing()) view.setImageBitmap(bmp);
+                    });
+                }
+            }, "loop-thumbs").start();
+        }
+    }
+
     /** Decoded off the main thread: a 4K photo takes long enough to drop frames. */
-    private void loadPhotoThumbs(final List<Uri> photos, final List<ImageView> thumbs) {
+    private void loadPhotoThumbs(final List<Picked> photos, final List<ImageView> thumbs) {
         final Handler ui = new Handler(Looper.getMainLooper());
         new Thread(() -> {
             for (int i = 0; i < photos.size(); i++) {
@@ -2021,8 +2609,34 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         }, "photo-thumbs").start();
     }
 
-    private Bitmap photoThumb(Uri uri) {
+    private Bitmap photoThumb(Picked picked) {
+        Uri uri = picked.uri;
         try {
+            if (picked.video) {
+                if ("file".equals(uri.getScheme())) {
+                    return android.media.ThumbnailUtils.createVideoThumbnail(uri.getPath(),
+                            android.provider.MediaStore.Images.Thumbnails.MINI_KIND);
+                }
+                if (Build.VERSION.SDK_INT >= 29) {
+                    return getContentResolver().loadThumbnail(uri,
+                            new android.util.Size((int) (196 * density), (int) (112 * density)), null);
+                }
+                // loadThumbnail is 29+; KitKat-to-Pie boxes use the old video thumbnails table.
+                long id = ContentUris.parseId(uri);
+                return MediaStore.Video.Thumbnails.getThumbnail(getContentResolver(), id,
+                        MediaStore.Images.Thumbnails.MINI_KIND, null);
+            }
+            // A USB picture is a file path, not a MediaStore row: loadThumbnail cannot read it.
+            if ("file".equals(uri.getScheme())) {
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                BitmapFactory.decodeFile(uri.getPath(), bounds);
+                int sample = 1;
+                while (bounds.outWidth / (sample * 2) >= 196 * density) sample *= 2;
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = sample;
+                return BitmapFactory.decodeFile(uri.getPath(), opts);
+            }
             if (Build.VERSION.SDK_INT >= 29) {
                 return getContentResolver().loadThumbnail(uri,
                         new android.util.Size((int) (196 * density), (int) (112 * density)), null);
@@ -2050,11 +2664,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private void startSystemPicker() {
         Intent pick = new Intent(Intent.ACTION_GET_CONTENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("image/*");
+                .setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
         if (!resolvesReal(this, pick) && Build.VERSION.SDK_INT >= 19) {
             pick = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                     .addCategory(Intent.CATEGORY_OPENABLE)
-                    .setType("image/*");
+                    .setType("*/*")
+                    .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
         }
         try {
             startActivityForResult(pick, REQ_PICK_WALLPAPER);
@@ -2175,7 +2791,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // The row count changes the grid layout and the dock split, so the desk has to be rebuilt.
         // The panel is closed first: rebuilding underneath an open popup is what left a stuck
         // invisible window on this TV a moment ago.
-        if (wallpaperPanel != null) wallpaperPanel.dismiss();
+        if (wallpaperPanel != null) closePage(wallpaperPanel);
         handler.postDelayed(this::recreate, 150);
     }
 
@@ -2185,19 +2801,51 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         java.io.File f = wall.file();
         if (f != null && f.isFile() && f.length() > 0) showWallpaper(f);
         else removeWallpaper();
-        applyWeatherVideo();
+        applyBackgroundVideo();
     }
 
-    /** The weather loop is a separate layer; it is on only when the user asked and a reading exists. */
-    private void applyWeatherVideo() {
-        Weather.Now now = Weather.cached(this);
-        if (Weather.videoOn(this) && now != null) stage.setWeatherVideo(Weather.video(now.kind));
-        else stage.clearWeatherVideo();
+    /**
+     * The moving layer: the user's dynamic wallpaper wins; otherwise the weather loop, when the user
+     * asked for it. A dynamic clip is re-downloaded after the cache was cleared at shutdown.
+     */
+    private void applyBackgroundVideo() {
+        if (LoopWallpaper.on(this)) {
+            java.io.File f = LoopWallpaper.file(this);
+            if (f != null && f.isFile() && f.length() > 0) {
+                stage.setLoop(f);
+                return;
+            }
+            stage.clearLoop();
+            new Thread(() -> {
+                final java.io.File got = LoopWallpaper.ensure(this);
+                if (got == null) return;
+                handler.post(() -> {
+                    // Still selected: the user may have turned it off while the clip downloaded.
+                    if (!isFinishing() && LoopWallpaper.on(this)) stage.setLoop(got);
+                });
+            }, "loop-download").start();
+            return;
+        }
+        stage.clearLoop();
+    }
+
+    /** A still picture was picked: the moving layer would hide it, so it goes. */
+    private void stopLoopWallpaper() {
+        if (!LoopWallpaper.on(this)) return;
+        LoopWallpaper.clear(this);
+        if (stage != null) stage.clearLoop();
+    }
+
+    private String loopWallpaperStatus() {
+        if (!LoopWallpaper.on(this)) return getString(R.string.loop_off);
+        String name = LoopWallpaper.name(this);
+        return name.isEmpty() ? getString(R.string.loop_daily)
+                : getString(R.string.loop_on, name);
     }
 
     /** Whether a picture is currently behind the desk, from the theme, a file, or the weather loop. */
     private boolean wallpaperPresent() {
-        return (stage != null && (stage.hasImage() || stage.hasWeather())) || (cfg != null && cfg.wallpaper != null);
+        return (stage != null && (stage.hasImage() || stage.hasLoop())) || (cfg != null && cfg.wallpaper != null);
     }
 
     // ---- weather ---------------------------------------------------------------------------------
@@ -2216,8 +2864,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         weatherIcon.setImageResource(Weather.icon(now.kind));
         weatherText.setText(weatherLine(now));
         weatherRow.setVisibility(View.VISIBLE);
-        if (weatherStatusView != null) weatherStatusView.setText(weatherStatus());
-        if (Weather.videoOn(this)) stage.setWeatherVideo(Weather.video(now.kind));
     }
 
     /** “杭州 18° 多云 · 明天 16° 晴 · 后天 14° 雨”, cut to the number of days the user chose. */
@@ -2274,11 +2920,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             if (position == 0) {
                 Weather.clearPlace(this);
                 refreshWeather(true);
-                if (cityPicker != null) cityPicker.dismiss();
+                if (cityPicker != null) closePage(cityPicker);
                 return;
             }
             showProvince(position - 1);
-        });
+        }, () -> showWallpaperPicker(PAGE_DESKTOP));
     }
 
     private void showProvince(final int provinceIndex) {
@@ -2302,7 +2948,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 return;
             }
             showDistricts(provinceIndex, position - 1, false);
-        });
+        }, this::showCityPicker);
     }
 
     /**
@@ -2339,18 +2985,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             JSONArray district = districts.optJSONArray(position - 2);
             if (district == null) return;
             setWeatherCity(district.optString(0), district.optDouble(1, 0), district.optDouble(2, 0));
-        });
+        }, fromTop ? this::showCityPicker : () -> showProvince(provinceIndex));
     }
 
     private void setWeatherCity(String name, double lat, double lon) {
         Weather.setPlace(this, name, lat, lon);
         refreshWeather(true);
         toast(getString(R.string.weather_city_set, name));
-        if (cityPicker != null) cityPicker.dismiss();
+        if (cityPicker != null) closePage(cityPicker);
     }
 
-    private void showCityList(CharSequence title, List<String> rows, CityAdapter.OnPick pick) {
-        if (cityPicker != null) cityPicker.dismiss();
+    private void showCityList(CharSequence title, List<String> rows, CityAdapter.OnPick pick,
+                              Runnable up) {
+        if (cityPicker != null) closePage(cityPicker);
         View panel = getLayoutInflater().inflate(R.layout.popup_city, root, false);
         ((TextView) panel.findViewById(R.id.cityTitle)).setText(title);
         RecyclerView list = panel.findViewById(R.id.cityRows);
@@ -2360,12 +3007,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         list.setAdapter(adapter);
 
         View anchor = findViewById(R.id.btnControl);
-        final PopupWindow popup = glassPanel(panel, anchor, 300);
-        popup.setOnDismissListener(() -> {
-            if (cityPicker == popup) cityPicker = null;
-        });
+        final PopupWindow popup = floatingOver(panel, anchor, 300, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(popup, up);
         cityPicker = popup;
-        dropIn(popup, panel, anchor, Gravity.START);
+        riseIn(popup, panel, anchor);
         list.post(() -> {
             View first = list.getChildAt(0);
             if (first != null) first.requestFocus();
@@ -2441,13 +3086,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 name = v.findViewById(R.id.cityName);
             }
         }
-    }
-
-    private String weatherStatus() {
-        if (!Weather.videoOn(this)) return getString(R.string.weather_wallpaper_off);
-        Weather.Now now = Weather.cached(this);
-        if (now == null) return getString(R.string.weather_fetching);
-        return getString(R.string.weather_wallpaper_on, getString(Weather.label(now.kind)));
     }
 
     static final class DockHolder extends RecyclerView.ViewHolder {
@@ -2977,11 +3615,26 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 ? View.VISIBLE : View.GONE);
     }
 
+    private String clockFormatLabel(String choice) {
+        if ("24".equals(choice)) return getString(R.string.clock_format_24);
+        if ("12".equals(choice)) return getString(R.string.clock_format_12);
+        return getString(R.string.clock_format_system);
+    }
+
+    /** The desk's own choice, or the TV's system setting when the user never picked one. */
+    private boolean clockIs24() {
+        String choice = getSharedPreferences(PREFS_LAYOUT, MODE_PRIVATE)
+                .getString(KEY_CLOCK_FORMAT, "system");
+        if ("24".equals(choice)) return true;
+        if ("12".equals(choice)) return false;
+        return android.text.format.DateFormat.is24HourFormat(this);
+    }
+
     /** Same three strings TextClock produced, without the API 17 class. */
     private void updateClock() {
         if (clock == null) return;
         long now = System.currentTimeMillis();
-        boolean h24 = android.text.format.DateFormat.is24HourFormat(this);
+        boolean h24 = clockIs24();
         clock.setText(android.text.format.DateFormat.format(h24 ? "HH:mm" : "h:mm", now));
         ampm.setText(h24 ? "" : android.text.format.DateFormat.format("a", now));
         date.setText(android.text.format.DateFormat.format(getString(R.string.date_format), now));
@@ -3195,19 +3848,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         return null;
     }
 
-    /** Dropdown menu under the control-centre pill: HDMI ports (with connection state), AV and Live TV. */
-    private void showInputs() {
+    /**
+     * Dropdown menu under the control-centre pill: HDMI ports (with connection state), AV and Live
+     * TV. False when this TV offers nothing to open, so the remote's source key is not swallowed.
+     */
+    private boolean showInputs() {
         View anchor = findViewById(R.id.btnControl);
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
 
-        // Compact: as wide as the Inputs pill (a touch wider so "HDMI 1" fits), hanging right below it.
-        int width = Math.max(anchor.getWidth(), (int) (150 * density));
-        final PopupWindow popup = new PopupWindow(panel, width, ViewGroup.LayoutParams.WRAP_CONTENT, true);
-        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));   // needed for Back to dismiss
-        popup.setOutsideTouchable(true);
-        popup.setAnimationStyle(0);
-        if (Build.VERSION.SDK_INT >= 21) popup.setElevation(0f);
+        // Rows are built before the sheet: floatingOver measures its content to size the glass, and
+        // a row closes it through `close` once the popup exists.
+        final PopupWindow[] popup = new PopupWindow[1];
+        final Runnable close = () -> { if (popup[0] != null) closePage(popup[0]); };
 
         TvInputs.Listing listing = TvInputs.supported() ? TvInputs.list(this) : null;
         boolean sawNonHdmi = false;
@@ -3217,7 +3870,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 boolean hdmi = info.hdmi;
                 if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
                 if (!hdmi) sawNonHdmi = true;
-                addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, info.label,
+                addInputRow(rows, close, hdmi ? R.drawable.ic_input : R.drawable.ic_av, info.label,
                         info.state, () -> openInput(info));
             }
         }
@@ -3240,29 +3893,36 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 // source provider and switches when handed the id.
                 java.util.List<TclSource.Item> ports = TclSource.list(this);
                 for (TclSource.Item port : ports) {
-                    addInputRow(rows, popup, port.hdmi ? R.drawable.ic_input : R.drawable.ic_av,
+                    addInputRow(rows, close, port.hdmi ? R.drawable.ic_input : R.drawable.ic_av,
                             port.label, -1, () -> openTv(TclSource.viewIntent(this, port.id)));
                 }
                 if (ports.isEmpty()) {
                     Errors.record("inputs", Build.MANUFACTURER + " " + Build.MODEL
                             + ": TCL source provider listed nothing");
                     Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
-                    return;
+                    return false;
                 }
             } else if (rows.getChildCount() == 0) {
+                // TVs older than TV Input Framework (LeTV eUI, MStar) report no ports either, but
+                // their own source app still opens the picture and switches from there. Opening it
+                // directly is the same one press the stock desktop gives.
+                if (VendorSource.present(this)) {
+                    HomeKeyService.suppressTakeover(20000);
+                    if (VendorSource.open(this)) return true;
+                }
                 // Xiaomi sets report no ports at all, but their player can still switch them when
                 // asked with the port id. Listing the ports here is what makes "HDMI 1" work for a
                 // Switch instead of dumping the user into the vendor panel.
                 java.util.List<XiaomiSource.Item> ports = XiaomiSource.list(this);
                 for (XiaomiSource.Item port : ports) {
-                    addInputRow(rows, popup, port.id == XiaomiSource.AV
+                    addInputRow(rows, close, port.id == XiaomiSource.AV
                                     ? R.drawable.ic_av : R.drawable.ic_input,
                             port.label, -1, () -> openTv(XiaomiSource.viewIntent(port.id)));
                 }
                 // The vendor's own source list, last. A port the fixed id table does not cover (an
                 // HDMI 4, or a console the firmware only names there) is still one press away.
                 if (!ports.isEmpty()) {
-                    addInputRow(rows, popup, R.drawable.ic_av,
+                    addInputRow(rows, close, R.drawable.ic_av,
                             getString(R.string.input_source_settings), -1,
                             () -> openTv(XiaomiSource.panelIntent()));
                 }
@@ -3273,15 +3933,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                     Intent own = sourcePanelIntent();
                     if (own == null) {
                         Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();
-                        return;
+                        return false;
                     }
-                    addInputRow(rows, popup, R.drawable.ic_av, getString(R.string.input_source_settings), -1,
+                    addInputRow(rows, close, R.drawable.ic_av, getString(R.string.input_source_settings), -1,
                             this::openSourcePanel);
                 }
             }
         } else if (panelConfigured() && liveTv == null) {
             openSourcePanel();
-            return;
+            return true;
         }
         // Xiaomi's tvplayer declares no launcher category, so the app-level Live TV lookup above
         // finds nothing even when the set has a tuner. Its DTMB page is the live TV screen.
@@ -3291,38 +3951,39 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         if (liveTv != null) {
             if (rows.getChildCount() > 0) addSeparator(rows);
             final Intent liveTvIntent = liveTv;
-            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> openTv(liveTvIntent));
+            addInputRow(rows, close, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> openTv(liveTvIntent));
         }
 
         // Fit the widest row: TVs that report a status on every port (Sony) would otherwise squeeze the names out.
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        popup.setWidth(Math.max(width, panel.getMeasuredWidth()));
-
-        dropIn(popup, panel, anchor, Gravity.START);
+        int widthDp = Math.max(150, (int) Math.ceil(panel.getMeasuredWidth() / density));
+        popup[0] = floatingOver(panel, anchor, widthDp, 0x73FFFFFF, 0x59FFFFFF);
+        upOnBack(popup[0], this::showControlCenter);
+        riseIn(popup[0], panel, anchor);
         rows.getChildAt(0).requestFocus();
+        return true;
     }
 
     /**
-     * A glass dropdown built the way the Inputs menu is: as wide as its widest row but never most of
-     * the screen, and no taller than the room under the button, so a long list scrolls inside the
-     * panel instead of running off the bottom of the TV.
+     * Back on a sub-page climbs to the page it was opened from instead of dropping all the way to
+     * the desk. The page stack is one level deep because the parent sheet is closed before the
+     * child opens: [up] is the parent's own show method, so Back rebuilds it.
      */
-    private PopupWindow glassPanel(View panel, View anchor, int minWidthDp) {
-        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        int width = Math.max(Math.max(anchor.getWidth(), (int) (minWidthDp * density)),
-                panel.getMeasuredWidth());
-        width = Math.min(width, (int) (getResources().getDisplayMetrics().widthPixels * 0.72f));
-        int[] at = new int[2];
-        anchor.getLocationInWindow(at);
-        int room = root.getHeight() - (at[1] + anchor.getHeight()) - (int) (34 * density);
-        int height = Math.min(panel.getMeasuredHeight(), Math.max(room, (int) (120 * density)));
-        PopupWindow popup = new PopupWindow(panel, width, height, true);
-        // Focusable alone is not enough: without a background some firmwares send Back nowhere,
-        // which is exactly how a dropdown turns into a panel you cannot leave.
-        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        popup.setOutsideTouchable(true);
-        if (Build.VERSION.SDK_INT >= 21) popup.setElevation(12 * density);
-        return popup;
+    private void upOnBack(PopupWindow popup, Runnable up) {
+        popup.setOnDismissListener(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            root.post(up);
+        });
+    }
+
+    /**
+     * Close a sheet on purpose — opening a child page or launching a system screen — without
+     * triggering its Back target. Dropping the listener is enough: dismiss() invokes it inline.
+     */
+    private void closePage(PopupWindow popup) {
+        if (popup == null) return;
+        popup.setOnDismissListener(null);
+        popup.dismiss();
     }
 
     /**
@@ -3338,6 +3999,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                                      int tintTop, int tintBottom) {
         // A notice mid-flight would be baked into the glass behind the panel; the dot keeps the state.
         if (updateBanner != null) updateBanner.setVisibility(View.GONE);
+        // Popups are their own window, so the desk's focus listener never sees their moves.
+        content.getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
+            if (newF != null) FocusSound.play(MainActivity.this);
+        });
         content.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         int screenW = getResources().getDisplayMetrics().widthPixels;
         int screenH = getResources().getDisplayMetrics().heightPixels;
@@ -3522,43 +4187,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
     }
 
-    private void dropIn(PopupWindow popup, View panel, View anchor, int gravity) {
-        if (reducedMotion) {
-            // Weak boxes: the unfold costs frames the user notices as lag, so just put it on screen.
-            showUnder(popup, anchor, gravity);
-            return;
-        }
-        panel.setAlpha(0f);
-        panel.setPivotY(0f);
-        panel.setScaleY(0.92f);
-        panel.setTranslationY(-8 * density);
-        showUnder(popup, anchor, gravity);
-        panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(220)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
-    }
-
-    /** The four-argument showAsDropDown arrived in 19; older boxes get the offset worked out here. */
-    private void showUnder(PopupWindow popup, View anchor, int gravity) {
-        int y = (int) (10 * density);
-        if (Build.VERSION.SDK_INT >= 19) {
-            popup.showAsDropDown(anchor, 0, y, gravity);
-            return;
-        }
-        int width = popup.getWidth() > 0 ? popup.getWidth() : popup.getContentView().getMeasuredWidth();
-        int x = gravity == Gravity.END ? anchor.getWidth() - width : 0;
-        popup.showAsDropDown(anchor, x, y);
-    }
-
     private void addSeparator(LinearLayout rows) {
         View line = new View(this);
-        line.setBackgroundColor(0x1FFFFFFF);
+        line.setBackgroundColor(0x1F111114);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) density);
         int m = (int) (6 * density), h = (int) (12 * density);
         lp.setMargins(h, m, h, m);
         rows.addView(line, lp);
     }
 
-    private void addInputRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, int state, Runnable action) {
+    private void addInputRow(LinearLayout rows, Runnable close, int iconRes, String title, int state, Runnable action) {
         View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
         ((ImageView) row.findViewById(R.id.icon)).setImageResource(iconRes);
         ((TextView) row.findViewById(R.id.title)).setText(title);
@@ -3577,7 +4215,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             dot.setVisibility(View.GONE);
         }
         row.setOnClickListener(v -> {
-            popup.dismiss();
+            close.run();
             action.run();
         });
         rows.addView(row);
@@ -4093,7 +4731,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         View anchor = findViewById(R.id.btnControl);
         detailPanel = floatingOver(panel, anchor, 360, 0x73FFFFFF, 0x59FFFFFF);
         riseIn(detailPanel, panel, anchor);
-        detailPanel.setOnDismissListener(this::focusControlPill);
+        upOnBack(detailPanel, this::showControlCenter);
         focusFirstRow(rows, 25);
     }
 
@@ -4189,6 +4827,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         }
         View panel = getLayoutInflater().inflate(R.layout.popup_control, root, false);
         LinearLayout tiles = panel.findViewById(R.id.tiles);
+        LinearLayout systemRows = panel.findViewById(R.id.systemRows);
         LinearLayout rows = panel.findViewById(R.id.rows);
         LinearLayout sliders = panel.findViewById(R.id.sliders);
         LinearLayout shortcuts = panel.findViewById(R.id.shortcuts);
@@ -4196,11 +4835,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         tilesGlide.setOval();
         tilesGlide.setLight();
 
+        // 工具 folds: the three rows are occasional, and the panel is long enough already.
+        final ImageView toolsArrow = panel.findViewById(R.id.toolsArrow);
+        panel.findViewById(R.id.toolsHeader).setOnClickListener(v -> {
+            boolean open = rows.getVisibility() == View.VISIBLE;
+            rows.setVisibility(open ? View.GONE : View.VISIBLE);
+            toolsArrow.setRotation(open ? 0f : 90f);
+        });
+
         // The four places people actually go, as round glass tiles. These used to be three separate
         // pills in the top bar; one glass entry that opens this sheet is the tvOS arrangement.
         // Wi-Fi is its own pill beside this one, so it is not repeated here.
-        addTile(tiles, R.drawable.ic_input, getString(R.string.inputs), this::showInputs);
-        addTile(tiles, R.drawable.ic_wallpaper, getString(R.string.wallpaper), this::showWallpaperPicker);
+        addTile(tiles, R.drawable.ic_input, getString(R.string.inputs), this::showInputs,
+                inputsAvailable());
+        addTile(tiles, R.drawable.ic_wallpaper, getString(R.string.launcher_settings),
+                this::showDesktopSettings);
         addTile(tiles, R.drawable.ic_dock, getString(R.string.favourites), this::showDockPicker);
         addTile(tiles, R.drawable.ic_settings, getString(R.string.tv_settings),
                 () -> openPage("Main", tvSettingsIntent(this)));
@@ -4208,22 +4857,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         // Bluetooth opens a detail sheet instead of flipping the radio in place: on a TV remote a
         // stray OK used to take the whole house off Bluetooth.
         if (bluetoothAdapter() != null) {
-            addControlRow(rows, R.drawable.ic_bluetooth, getString(R.string.bluetooth),
-                    bluetoothSubtitle(), () -> {
+            View btRow = addControlRow(systemRows, R.drawable.ic_bluetooth,
+                    getString(R.string.bluetooth), bluetoothSubtitle(), () -> {
                         if (controlPanel != null) controlPanel.dismiss();
                         showBluetoothDetails();
                     }, true);
+            // Light ink, but not on bare glass: see control_light_row_bg.
+            btRow.setBackgroundResource(R.drawable.control_light_row_bg);
         }
-
-        // Dock size: the count row opens a chooser. The old pair of +/− pills sat below the volume
-        // slider where the remote did not naturally reach, and stepping 1..8 one press at a time
-        // was the wrong shape for a value with eight choices.
-        addControlRow(rows, R.drawable.ic_dock, getString(R.string.dock_size_title),
-                getResources().getQuantityString(R.plurals.dock_size_value, adapter.dockSize(), adapter.dockSize()),
-                () -> {
-                    if (controlPanel != null) controlPanel.dismiss();
-                    root.post(this::showDockSizePicker);
-                });
 
         addControlRow(rows, R.drawable.ic_apps, getString(R.string.running_title),
                 getString(R.string.running_subtitle), () -> {
@@ -4397,11 +5038,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             chevron.setVisibility(View.GONE);
         } else {
             if (!light) chevron.setColorFilter(0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+            // The Wi-Fi sheet is the one light pane; ink shows on it, white glare does not.
+            FocusFx.attach(row, light ? 0x000000 : 0xFFFFFF);
             row.setOnFocusChangeListener((v, hasFocus) -> {
                 if (!light) {
                     chevron.setColorFilter(hasFocus ? 0xFF111111 : 0xFFFFFFFF,
                             PorterDuff.Mode.SRC_IN);
                 }
+                FocusFx.onFocus(v, hasFocus, false);
                 glideFocus(v, hasFocus, rows);
             });
             row.setOnClickListener(v -> action.run());
@@ -4911,7 +5555,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     /** A second glass sheet under the pill, for a device list or a few facts. */
     private void showDetail(int titleRes, DetailBuilder builder) {
         if (detailPanel != null && detailPanel.isShowing()) {
-            detailPanel.dismiss();
+            closePage(detailPanel);
             return;
         }
         View panel = getLayoutInflater().inflate(R.layout.popup_detail, root, false);
@@ -4921,7 +5565,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         View anchor = findViewById(R.id.btnControl);
         detailPanel = floatingOver(panel, anchor, 340, 0x73FFFFFF, 0x59FFFFFF);
         riseIn(detailPanel, panel, anchor);
-        detailPanel.setOnDismissListener(this::focusControlPill);
+        upOnBack(detailPanel, this::showControlCenter);
         focusFirstRow(rows, 25);
     }
 
@@ -4953,7 +5597,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     }
 
     private void dismissDetail() {
-        if (detailPanel != null) detailPanel.dismiss();
+        closePage(detailPanel);
     }
 
     /**
@@ -4962,7 +5606,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
      * and the bottom half is this desk's own services, which we can actually see.
      */
     private void showRunningPanel() {
-        if (detailPanel != null && detailPanel.isShowing()) detailPanel.dismiss();
+        if (detailPanel != null && detailPanel.isShowing()) closePage(detailPanel);
         View panel = getLayoutInflater().inflate(R.layout.popup_detail, root, false);
         ((TextView) panel.findViewById(R.id.detailTitle)).setText(R.string.running_title);
         LinearLayout rows = panel.findViewById(R.id.detailRows);
@@ -5028,7 +5672,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         View anchor = findViewById(R.id.btnControl);
         detailPanel = floatingOver(panel, anchor, 360, 0x73FFFFFF, 0x59FFFFFF);
         riseIn(detailPanel, panel, anchor);
-        detailPanel.setOnDismissListener(this::focusControlPill);
+        upOnBack(detailPanel, this::showControlCenter);
         focusFirstRow(rows, 25);
     }
 
@@ -5091,8 +5735,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         ((TextView) row.findViewById(R.id.title)).setText(title);
         ((TextView) row.findViewById(R.id.subtitle)).setText(subtitle);
         ImageView chevron = row.findViewById(R.id.chevron);
+        FocusFx.attach(row);
         row.setOnFocusChangeListener((v, hasFocus) -> {
             chevron.setColorFilter(hasFocus ? 0xFF111111 : 0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
+            FocusFx.onFocus(v, hasFocus, false);
             glideFocus(v, hasFocus, rows);
         });
         chevron.setColorFilter(0xFFFFFFFF, PorterDuff.Mode.SRC_IN);
@@ -5102,14 +5748,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
 
     /** A round glass tile that closes the sheet and goes somewhere. */
     private void addTile(LinearLayout tiles, int iconRes, String title, Runnable action) {
+        addTile(tiles, iconRes, title, action, false);
+    }
+
+    /** [dot] marks a tile with a green unread-style dot (the Inputs tile: another source exists). */
+    private void addTile(LinearLayout tiles, int iconRes, String title, Runnable action, boolean dot) {
         View tile = getLayoutInflater().inflate(R.layout.item_control_tile, tiles, false);
         ImageView icon = tile.findViewById(R.id.icon);
         icon.setImageResource(iconRes);
+        tile.findViewById(R.id.dot).setVisibility(dot ? View.VISIBLE : View.GONE);
         ((TextView) tile.findViewById(R.id.title)).setText(title);
         // On the light sheet the selection is ink, so the glyph goes from ink to white. Tinting by
         // hand works on the old Android versions where a state-list tint is ignored.
+        FocusFx.attach(tile);
         tile.setOnFocusChangeListener((v, hasFocus) -> {
             icon.setColorFilter(hasFocus ? 0xFFFFFFFF : 0xFF111114, PorterDuff.Mode.SRC_IN);
+            FocusFx.onFocus(v, hasFocus, false);
             glideFocus(v, hasFocus, tiles);
         });
         icon.setColorFilter(0xFF111114, PorterDuff.Mode.SRC_IN);
@@ -5118,6 +5772,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             action.run();
         });
         tiles.addView(tile);
+    }
+
+    /**
+     * True only when a source is actually plugged in. A port that merely exists is not something
+     * to switch to — the dot used to glow on an empty TV because Xiaomi lists its five ports
+     * unconditionally and TCL's provider lists every configured port. Neither reports a
+     * connection state, so only the platform's TV input state can earn the dot.
+     */
+    private boolean inputsAvailable() {
+        if (!TvInputs.supported()) return false;
+        for (TvInputs.Item item : TvInputs.list(this).items) {
+            if (item.state == TvInputManager.INPUT_STATE_CONNECTED) return true;
+        }
+        return false;
     }
 
     /** One row of shortcut pills, with its own sliding selection pane; returns the row to fill. */
@@ -5166,8 +5834,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             lp.gravity = Gravity.CENTER_VERTICAL;
             ((LinearLayout) pill).addView(dot, lp);
         }
+        FocusFx.attach(pill);
         pill.setOnFocusChangeListener((v, hasFocus) -> {
             icon.setColorFilter(hasFocus ? 0xFFFFFFFF : 0xFF111114, PorterDuff.Mode.SRC_IN);
+            FocusFx.onFocus(v, hasFocus, false);
             glideFocus(v, hasFocus, row);
         });
         pill.setOnClickListener(v -> {
@@ -5205,20 +5875,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         ImageView icon = new ImageView(this);
         icon.setImageResource(iconRes);
         icon.setColorFilter(0xFF111114); // setImageTintList is API 21; this works everywhere.
-        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(dp(24), dp(24),
+        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(dp(18), dp(18),
                 Gravity.START | Gravity.CENTER_VERTICAL);
-        iconLp.leftMargin = dp(20);
+        iconLp.leftMargin = dp(14);
         capsule.addView(icon, iconLp);
 
         final TextView valueView = new TextView(this);
         valueView.setTextColor(0xFF111114);
-        valueView.setTextSize(13);
+        valueView.setTextSize(11);
         valueView.setText(
                 Math.round(Math.max(0, Math.min(range, value)) * 100f / range) + "%");
         FrameLayout.LayoutParams valueLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.END | Gravity.CENTER_VERTICAL);
-        valueLp.rightMargin = dp(22);
+        valueLp.rightMargin = dp(16);
         capsule.addView(valueView, valueLp);
 
         // The level is ink until the slider takes focus, then white. Whichever it is, the glyph
@@ -5261,8 +5931,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             }
         });
         LinearLayout.LayoutParams capsuleLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(58));
-        capsuleLp.setMargins(dp(4), dp(3), dp(4), dp(3));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        capsuleLp.setMargins(dp(4), dp(2), dp(4), dp(2));
         parent.addView(capsule, capsuleLp);
         return bar;
     }

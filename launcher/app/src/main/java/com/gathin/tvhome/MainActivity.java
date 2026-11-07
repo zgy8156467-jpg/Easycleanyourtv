@@ -4237,8 +4237,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
     private void checkUpdate(final int attempt) {
         Remote.checkUpdate(this, update -> {
             if (!isFinishing()) notifyUpdate(update);
-        }, (ok, message) -> {
-            if (ok || attempt >= 3 || isFinishing()) return;
+        }, (outcome, message) -> {
+            // Only a network hiccup is worth another try: a manifest we cannot verify would fail
+            // the same way three times and just write three error reports.
+            if (outcome != Remote.Outcome.RETRY || attempt >= 3 || isFinishing()) return;
             handler.postDelayed(() -> checkUpdate(attempt + 1), attempt == 0 ? 20000L : 120000L);
         });
     }
@@ -4248,7 +4250,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
         toast(getString(R.string.update_checking));
         Remote.checkUpdateNow(this, update -> {
             if (!isFinishing()) showUpdate(update);
-        }, (ok, message) -> {
+        }, (outcome, message) -> {
+            // A manifest we cannot verify is not "try again later": say so, otherwise the release
+            // that broke signing looks like an ordinary network failure on every TV.
+            if (outcome == Remote.Outcome.PERMANENT) {
+                toast(getString(R.string.update_verify_failed));
+                return;
+            }
+            boolean ok = outcome == Remote.Outcome.OK;
             // Asked by hand and nothing newer: a dot left from an older check is stale.
             if (ok) clearUpdateUnread();
             toast(getString(ok
@@ -4499,7 +4508,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener, W
             }
             update.notes = getString(R.string.stable_notes);
             showInstall(update, getString(R.string.stable_title), update.notes, true);
-        }, (ok, message) -> toast(getString(R.string.stable_unavailable)));
+        }, (outcome, message) -> toast(getString(R.string.stable_unavailable)));
     }
 
     private void showInstall(final Remote.Update update, final CharSequence title,

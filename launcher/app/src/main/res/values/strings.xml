@@ -157,6 +157,7 @@
     <string name="update_checking">Checking for updates…</string>
     <string name="update_latest">Already on the latest version %1$s</string>
     <string name="update_check_failed">Could not check for updates. Try again later.</string>
+    <string name="update_verify_failed">Update check failed: the release did not pass verification.</string>
     <string name="stable_switch">Switch to the stable version</string>
     <string name="stable_title">Switch to the stable version</string>
     <string name="stable_checking">Looking for the stable build…</string>

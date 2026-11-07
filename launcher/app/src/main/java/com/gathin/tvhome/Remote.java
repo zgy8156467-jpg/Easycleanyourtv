@@ -65,6 +65,27 @@ final class Remote {
         void run(boolean ok, String message);
     }
 
+    /**
+     * How an update check ended. Callers retry only on {@link #RETRY}: a bad signature is not going
+     * to fix itself, and retrying it three times just writes three identical error reports.
+     */
+    enum Outcome { OK, RETRY, PERMANENT }
+
+    interface Checked {
+        void run(Outcome outcome, String message);
+    }
+
+    /** A manifest fetch plus what it means: retry, refuse, or here is the update. */
+    static final class Fetched {
+        final Outcome outcome;
+        final Update update;
+
+        Fetched(Outcome outcome, Update update) {
+            this.outcome = outcome;
+            this.update = update;
+        }
+    }
+
     interface Progress {
         void onProgress(int percent);
     }
@@ -80,6 +101,8 @@ final class Remote {
         String notes = "";
         long size;
         String md5 = "";
+        String sha256 = "";
+        String sig = "";
     }
 
     private Remote() {
@@ -110,24 +133,24 @@ final class Remote {
      * build. {@code done} always runs, with false when the manifest could not be fetched, so the
      * caller can retry a check that ran before the TV's Wi-Fi had associated.
      */
-    static void checkUpdate(final Context context, final Found found, final Done done) {
+    static void checkUpdate(final Context context, final Found found, final Checked done) {
         final int installed = versionCode(context);
         final String skipped = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_SKIP, "");
         new Thread(() -> {
-            final Update update = fetch();
-            if (update == null) {
-                MAIN.post(() -> done.run(false, null));
-                return;
-            }
-            if (update.code > installed && !String.valueOf(update.code).equals(skipped)) {
-                MAIN.post(() -> {
+            final Fetched result = fetch();
+            MAIN.post(() -> {
+                if (result.outcome != Outcome.OK) {
+                    done.run(result.outcome, null);
+                    return;
+                }
+                final Update update = result.update;
+                if (update != null && update.code > installed
+                        && !String.valueOf(update.code).equals(skipped)) {
                     found.run(update);
-                    done.run(true, null);
-                });
-            } else {
-                MAIN.post(() -> done.run(true, null));
-            }
+                }
+                done.run(Outcome.OK, null);
+            });
         }, "update-check").start();
     }
 
@@ -135,17 +158,19 @@ final class Remote {
      * The pill in the top bar: always reports back, and ignores the remembered "not now" — asking by
      * hand means the user wants to see the release even if they skipped it on the last boot.
      */
-    static void checkUpdateNow(final Context context, final Found found, final Done done) {
+    static void checkUpdateNow(final Context context, final Found found, final Checked done) {
         final int installed = versionCode(context);
         new Thread(() -> {
-            final Update update = fetch();
-            if (update == null) {
-                MAIN.post(() -> done.run(false, null));
-            } else if (update.code <= installed) {
-                MAIN.post(() -> done.run(true, null));
-            } else {
-                MAIN.post(() -> found.run(update));
-            }
+            final Fetched result = fetch();
+            MAIN.post(() -> {
+                if (result.outcome != Outcome.OK) {
+                    done.run(result.outcome, null);
+                } else if (result.update == null || result.update.code <= installed) {
+                    done.run(Outcome.OK, null);
+                } else {
+                    found.run(result.update);
+                }
+            });
         }, "update-check").start();
     }
 
@@ -153,21 +178,36 @@ final class Remote {
      * The stable release to switch to from a beta build. Same package name, so this is a normal
      * update: it only installs when the stable versionCode is at least the beta's.
      */
-    static void checkStable(final Found found, final Done done) {
+    static void checkStable(final Found found, final Checked done) {
         new Thread(() -> {
-            final Update update = fetch("/update.json");
+            // The manifest decides the channel, not BuildConfig: a beta build switching back to
+            // stable must verify against the modern signature, not its own.
+            final Fetched result = fetch("/" + STABLE_PATH, STABLE_CHANNEL);
             MAIN.post(() -> {
-                if (update == null || update.code <= 0) done.run(false, null);
-                else found.run(update);
+                if (result.outcome != Outcome.OK || result.update == null
+                        || result.update.code <= 0) {
+                    done.run(result.outcome == Outcome.OK ? Outcome.PERMANENT : result.outcome,
+                            null);
+                } else {
+                    found.run(result.update);
+                }
             });
         }, "stable-check").start();
     }
 
-    private static Update fetch() {
-        return fetch("/" + BuildConfig.UPDATE_PATH);
+    /** Where the stable channel lives; read from any build, so the channel is named here. */
+    private static final String STABLE_PATH = "update.json";
+    private static final String STABLE_CHANNEL = "modern";
+
+    private static Fetched fetch() {
+        return fetch("/" + BuildConfig.UPDATE_PATH, BuildConfig.CHANNEL);
     }
 
-    private static Update fetch(String path) {
+    /**
+     * @param channel the channel the manifest at {@code path} is signed for — taken from the path,
+     *                never from {@link BuildConfig#CHANNEL}
+     */
+    private static Fetched fetch(String path, String channel) {
         HttpURLConnection conn = null;
         try {
             conn = (HttpURLConnection) new URL(BASE + path).openConnection();
@@ -176,14 +216,11 @@ final class Remote {
             conn.setRequestProperty("User-Agent", "tvhome");
             if (conn.getResponseCode() != 200) {
                 Errors.record("update", "manifest HTTP " + conn.getResponseCode());
-                return null;
+                return new Fetched(Outcome.RETRY, null);
             }
             JSONObject json = new JSONObject(readAll(conn.getInputStream(), 64 * 1024));
             int code = json.optInt("versionCode", 0);
-            if (code <= 0) {
-                Errors.record("update", "manifest without versionCode");
-                return null;
-            }
+            if (code <= 0) return new Fetched(Outcome.OK, null);
             Update update = new Update();
             update.code = code;
             update.name = json.optString("versionName", "");
@@ -191,14 +228,36 @@ final class Remote {
             update.notes = json.optString("notes", "");
             update.size = json.optLong("size", 0);
             update.md5 = json.optString("md5", "");
-            return update;
+            update.sha256 = json.optString("sha256", "");
+            update.sig = json.optString("sig", "");
+            if (!trusted(update, channel)) return new Fetched(Outcome.PERMANENT, null);
+            return new Fetched(Outcome.OK, update);
         } catch (Exception e) {
             Log.w(TAG, "update check failed", e);
             Errors.record("update", "check " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            return null;
+            return new Fetched(Outcome.RETRY, null);
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
+
+    /**
+     * Verifies the manifest signature. Unsigned or badly signed manifests are never shown — losing
+     * an update is recoverable, installing something we did not sign is not.
+     */
+    private static boolean trusted(Update update, String channel) {
+        if (update.sha256.isEmpty() || update.sig.isEmpty()) {
+            Log.w(TAG, "unsigned manifest for " + channel + " " + update.code);
+            Errors.record("verify", "unsigned " + channel + " " + update.code);
+            return false;
+        }
+        if (!Signer.verify(Signer.canonical(channel, update.code, update.sha256, update.size),
+                update.sig)) {
+            Log.w(TAG, "bad signature for " + channel + " " + update.code);
+            Errors.record("verify", "bad signature " + channel + " " + update.code);
+            return false;
+        }
+        return true;
     }
 
     /** Downloads the APK into the cache and calls back (main thread) with its path when it is verified. */
@@ -222,6 +281,7 @@ final class Remote {
                 }
                 long total = conn.getContentLength();
                 MessageDigest digest = MessageDigest.getInstance("MD5");
+                MessageDigest sha = MessageDigest.getInstance("SHA-256");
                 int last = -1;
                 long got = 0;
                 try (InputStream in = conn.getInputStream();
@@ -231,6 +291,7 @@ final class Remote {
                     while ((n = in.read(buf)) > 0) {
                         out.write(buf, 0, n);
                         digest.update(buf, 0, n);
+                        sha.update(buf, 0, n);
                         got += n;
                         if (total > 0 && progress != null) {
                             int pct = (int) (got * 100 / total);
@@ -246,9 +307,20 @@ final class Remote {
                         && !hex(digest.digest()).equalsIgnoreCase(update.md5)) {
                     throw new IOException("md5 mismatch");
                 }
+                // The signed hash is the one that decides. fetch() already refused a manifest
+                // without it; checking here too keeps download() safe on its own.
+                if (update.sha256.isEmpty()
+                        || !hex(sha.digest()).equalsIgnoreCase(update.sha256)) {
+                    throw new IOException("sha256 mismatch");
+                }
                 //noinspection ResultOfMethodCallIgnored
                 apk.delete();
                 if (!part.renameTo(apk)) throw new IOException("rename");
+                if (!Signer.sameSigner(context, apk)) {
+                    //noinspection ResultOfMethodCallIgnored
+                    apk.delete();
+                    throw new IOException("different signer");
+                }
                 MAIN.post(() -> done.run(true, apk.getAbsolutePath()));
             } catch (Exception e) {
                 Log.w(TAG, "download failed", e);

@@ -156,6 +156,7 @@
     <string name="update_checking">正在检查更新…</string>
     <string name="update_latest">已是最新版本 %1$s</string>
     <string name="update_check_failed">检查更新失败，稍后再试</string>
+    <string name="update_verify_failed">更新校验失败：新版本未通过签名验证</string>
     <string name="stable_switch">切换到正式版</string>
     <string name="stable_title">切换到正式版</string>
     <string name="stable_checking">正在查找正式版…</string>
